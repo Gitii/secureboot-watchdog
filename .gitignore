@@ -1,9 +1,12 @@
-# debhelper build artifacts
+# debhelper build artifacts (note: keep source-tracked files like
+# debian/secureboot-watchdog.lintian-overrides — that's why this list
+# is specific instead of using debian/secureboot-watchdog.*)
 debian/.debhelper/
 debian/secureboot-watchdog/
-debian/secureboot-watchdog.*
 debian/files
 debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
 debian/*.log
 debian/debhelper-build-stamp
 

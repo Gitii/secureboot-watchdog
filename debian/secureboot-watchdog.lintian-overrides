@@ -1,0 +1,9 @@
+# dh_installsystemduser in debhelper 13 installs user unit files but does not
+# generate any maintainer-script code (per its man page: "planned for a future
+# version"). We must call `systemctl --global enable` ourselves from postinst
+# to make the user .path unit active for every login session.
+secureboot-watchdog: maintainer-script-calls-systemctl
+
+# Short, self-documenting personal tooling; no upstream man pages exist.
+# README and `--help` cover usage. Skip.
+secureboot-watchdog: no-manual-page *
