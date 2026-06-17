@@ -1,3 +1,14 @@
+secureboot-watchdog (0.5) noble; urgency=medium
+
+  * check_tpm_pcr_drift: query the system journal, not the kernel-only
+    journal. The previous implementation used JOURNAL_CMD which defaults
+    to `journalctl -kb` — kernel messages only — so the widened regex
+    added in 0.4 still missed the systemd-cryptsetup userspace lines
+    ("Failed to unseal secret using TPM2"). Split out SYSTEM_JOURNAL_CMD
+    (without -k) and use it for TPM/cryptsetup checks.
+
+ -- Gitii <Gitii@users.noreply.github.com>  Wed, 17 Jun 2026 11:00:00 +0000
+
 secureboot-watchdog (0.4) noble; urgency=medium
 
   * check_tpm_pcr_drift: widen the journal regex to also match

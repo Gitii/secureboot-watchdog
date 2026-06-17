@@ -7,6 +7,9 @@ shopt -s nullglob
 KERNEL=$(uname -r)
 ISSUES_JSON=()
 JOURNAL_CMD=${JOURNAL_CMD:-"journalctl -kb --no-pager -o cat"}
+# Userspace journal (no -k) — for systemd-cryptsetup/TPM messages, which the
+# kernel-only JOURNAL_CMD above silently filters out.
+SYSTEM_JOURNAL_CMD=${SYSTEM_JOURNAL_CMD:-"journalctl -b --no-pager -o cat"}
 MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
 EFI_ROOTS=(/boot/efi/EFI/systemd /boot/efi/EFI/BOOT /boot/efi/EFI/Linux)
 
@@ -203,7 +206,7 @@ check_tpm_pcr_drift() {
     # are PCR drift (sealed PCR values no longer match — usually PCR 7 after
     # a shim/kernel/MOK change) and TPM dictionary-attack lockout (repeated
     # failed unseals push the TPM into a cooldown). Both surface here.
-    hits=$(eval "$JOURNAL_CMD" 2>/dev/null \
+    hits=$(eval "$SYSTEM_JOURNAL_CMD" 2>/dev/null \
         | grep -iE 'Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout' \
         | tail -3) || true
     [[ -z $hits ]] && return 0
