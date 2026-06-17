@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Make sure the kernel postinst hook is executable.
+        if [ -e /etc/kernel/postinst.d/zzz-secureboot-recheck ]; then
+            chmod 0755 /etc/kernel/postinst.d/zzz-secureboot-recheck
+        fi
+        # Enable the user .path unit globally so it comes up at login for every user.
+        # dh_installsystemd does not yet --global enable user units.
+        if command -v systemctl >/dev/null; then
+            systemctl --global enable secureboot-notify.path >/dev/null 2>&1 || true
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

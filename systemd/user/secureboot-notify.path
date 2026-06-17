@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch /run/secureboot-monitor/status.json for changes
+Documentation=https://github.com/Gitii/secureboot-watchdog
+
+[Path]
+PathChanged=/run/secureboot-monitor/status.json
+PathExists=/run/secureboot-monitor/status.json
+Unit=secureboot-notify.service
+
+[Install]
+WantedBy=default.target

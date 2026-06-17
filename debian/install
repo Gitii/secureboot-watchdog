@@ -1,0 +1,11 @@
+bin/secureboot-notify usr/bin
+sbin/secureboot-check usr/sbin
+sbin/secureboot-fix usr/sbin
+systemd/secureboot-monitor.service lib/systemd/system
+systemd/secureboot-monitor.timer lib/systemd/system
+systemd/secureboot-dkms.path lib/systemd/system
+systemd/user/secureboot-notify.service lib/systemd/user
+systemd/user/secureboot-notify.path lib/systemd/user
+kernel/zzz-secureboot-recheck etc/kernel/postinst.d
+polkit/com.localhost.secureboot.fix.policy usr/share/polkit-1/actions
+desktop/secureboot-notify.desktop usr/share/applications

@@ -1,0 +1,225 @@
+#!/bin/bash
+# secureboot-check: Inspect the Secure Boot chain and emit a JSON status report.
+# Runs as root (system service). Emits report to stdout.
+set -uo pipefail
+shopt -s nullglob
+
+KERNEL=$(uname -r)
+ISSUES_JSON=()
+JOURNAL_CMD=${JOURNAL_CMD:-"journalctl -kb --no-pager -o cat"}
+MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
+EFI_ROOTS=(/boot/efi/EFI/systemd /boot/efi/EFI/BOOT /boot/efi/EFI/Linux)
+
+add_issue() {
+    local code=$1 severity=$2 summary=$3 detail=$4 auto=$5
+    ISSUES_JSON+=("$(jq -nc \
+        --arg c "$code" --arg s "$severity" --arg sm "$summary" \
+        --arg d "$detail" --argjson a "$auto" \
+        '{code:$c, severity:$s, summary:$sm, detail:$d, auto_fixable:$a}')")
+}
+
+check_sb_state() {
+    local out
+    out=$(mokutil --sb-state 2>&1) || true
+    if grep -qi 'disabled' <<<"$out"; then
+        add_issue SB_DISABLED critical \
+            "Secure Boot is disabled in firmware" \
+            "mokutil reports: $out. Re-enable Secure Boot from your firmware setup (UEFI). This cannot be toggled from the OS." false
+    fi
+}
+
+check_lockdown() {
+    local f=/sys/kernel/security/lockdown
+    [[ -r $f ]] || return 0
+    local first
+    first=$(awk '{for(i=1;i<=NF;i++) if ($i ~ /^\[/) {print $i; exit}}' "$f")
+    if [[ $first == "[none]" ]]; then
+        add_issue LOCKDOWN_OFF warning \
+            "Kernel lockdown is off" \
+            "Secure Boot is meant to imply lockdown=integrity, but $f reports [none]. The chain is not enforcing module signature checks." false
+    fi
+}
+
+check_cmdline_lockdown() {
+    if grep -qE '\blockdown=none\b' /proc/cmdline; then
+        add_issue CMDLINE_LOCKDOWN_OVERRIDE warning \
+            "Kernel cmdline disables lockdown" \
+            "/proc/cmdline contains lockdown=none. Remove it from /etc/kernel/cmdline and rebuild loader entries / UKI." true
+    fi
+}
+
+check_tainted() {
+    local t=${MOCK_TAINTED:-$(cat /proc/sys/kernel/tainted 2>/dev/null || echo 0)}
+    if (( (t & 8192) != 0 )); then
+        add_issue UNSIGNED_MODULE_LOADED critical \
+            "Unsigned kernel module is loaded" \
+            "tainted=$t has bit 13 set. An unsigned module bypassed verification. Re-sign DKMS modules and reboot." true
+    fi
+}
+
+check_dkms_state() {
+    command -v dkms >/dev/null || return 0
+    local status_out modname state failed=()
+    status_out=$(dkms status -k "$KERNEL" 2>/dev/null) || return 0
+    while IFS= read -r line; do
+        [[ -z $line ]] && continue
+        modname=$(awk -F'[/,:]' '{print $1}' <<<"$line" | tr -d ' ')
+        if ! grep -qi 'installed' <<<"$line"; then
+            failed+=("$modname")
+        fi
+    done <<<"$status_out"
+    if (( ${#failed[@]} > 0 )); then
+        add_issue DKMS_BUILD_FAILED critical \
+            "DKMS modules not installed for $KERNEL" \
+            "Modules not in 'installed' state for kernel $KERNEL: ${failed[*]}. Run 'dkms autoinstall' to rebuild." true
+    fi
+}
+
+check_dkms_signed() {
+    command -v dkms >/dev/null || return 0
+    local status_out modname unsigned=() info
+    status_out=$(dkms status -k "$KERNEL" 2>/dev/null) || return 0
+    while IFS= read -r line; do
+        [[ -z $line ]] && continue
+        grep -qi 'installed' <<<"$line" || continue
+        modname=$(awk -F'[/,:]' '{print $1}' <<<"$line" | tr -d ' ')
+        local ko_name=${modname//-/_}
+        info=$(modinfo "$ko_name" 2>/dev/null) || continue
+        if ! grep -qE '^(signer|sig_id):' <<<"$info"; then
+            unsigned+=("$modname")
+        fi
+    done <<<"$status_out"
+    if (( ${#unsigned[@]} > 0 )); then
+        add_issue DKMS_UNSIGNED critical \
+            "DKMS modules are not signed" \
+            "Unsigned DKMS modules: ${unsigned[*]}. With Secure Boot + lockdown=integrity these will refuse to load. Re-sign with your local MOK." true
+    fi
+}
+
+check_signature_failures() {
+    local hits
+    hits=$(eval "$JOURNAL_CMD" 2>/dev/null | grep -iE 'signature verification failed|module verification failed|Lockdown:.*not allowed' | tail -10) || true
+    if [[ -n $hits ]]; then
+        local short
+        short=$(head -3 <<<"$hits")
+        add_issue SIGNATURE_FAILURES critical \
+            "Kernel logged signature / lockdown rejections this boot" \
+            "Recent kernel log lines:\n$short" true
+    fi
+}
+
+check_efi_binaries() {
+    command -v sbverify >/dev/null || return 0
+    local unsigned=() f
+    for dir in "${EFI_ROOTS[@]}"; do
+        [[ -d $dir ]] || continue
+        for f in "$dir"/*.efi "$dir"/*.EFI; do
+            [[ -f $f ]] || continue
+            if ! sbverify --list "$f" >/dev/null 2>&1; then
+                unsigned+=("$f")
+            fi
+        done
+    done
+    if (( ${#unsigned[@]} > 0 )); then
+        add_issue EFI_UNSIGNED critical \
+            "Unsigned EFI binaries on the ESP" \
+            "These EFI binaries lack a valid signature: ${unsigned[*]}. Reinstall the owning package (shim-signed, systemd-boot-efi, or systemd-boot)." true
+    fi
+}
+
+mok_fingerprint() {
+    openssl x509 -inform der -in "$1" -noout -fingerprint -sha256 2>/dev/null \
+        | sed 's/^.*=//; s/://g' | tr 'A-Z' 'a-z'
+}
+
+check_mok_enrollment() {
+    [[ -d $MOK_DIR ]] || return 0
+    command -v openssl >/dev/null || return 0
+    local enrolled missing=() der fp
+    enrolled=$(mokutil --list-enrolled 2>/dev/null | tr 'A-Z' 'a-z' | tr -d ':')
+    for der in "$MOK_DIR"/*.der; do
+        [[ -f $der ]] || continue
+        fp=$(mok_fingerprint "$der") || continue
+        [[ -z $fp ]] && continue
+        if ! grep -q "$fp" <<<"$enrolled"; then
+            missing+=("$(basename "$der")")
+        fi
+    done
+    if (( ${#missing[@]} > 0 )); then
+        add_issue MOK_NOT_ENROLLED critical \
+            "Local MOK key is not enrolled" \
+            "Keys in $MOK_DIR not enrolled: ${missing[*]}. Run 'mokutil --import' and complete enrollment in MokManager at next reboot." true
+    fi
+}
+
+check_mok_pending() {
+    local new
+    new=$(mokutil --list-new 2>/dev/null) || return 0
+    if [[ -n $new && $new != *"MokNew is empty"* ]]; then
+        add_issue MOK_PENDING info \
+            "MOK enrollment is pending" \
+            "There is a MokNew entry waiting. Reboot and complete enrollment in MokManager (blue screen, press a key, choose Enroll MOK)." false
+    fi
+}
+
+check_sbat_revoked() {
+    local shim=/usr/lib/shim/shimx64.efi.signed
+    [[ -f $shim ]] || return 0
+    command -v objdump >/dev/null || return 0
+    local installed revoked installed_levels revoked_levels component bad=()
+    installed=$(objdump -j .sbat -s "$shim" 2>/dev/null | grep -E '^ [0-9a-f]+' | awk '{$1=""; print}' | tr -d '.' | head -200) || return 0
+    revoked=$(mokutil --list-sbat-revocations 2>/dev/null) || true
+    [[ -z $revoked || $revoked == *"empty"* ]] && return 0
+    while IFS= read -r line; do
+        component=$(awk -F',' '{print $1}' <<<"$line" | tr -d ' ')
+        local level
+        level=$(awk -F',' '{print $2}' <<<"$line" | tr -d ' ')
+        [[ -z $component || -z $level ]] && continue
+        local installed_level
+        installed_level=$(grep -oE "${component},[0-9]+" <<<"$installed" | head -1 | awk -F',' '{print $2}')
+        [[ -z $installed_level ]] && continue
+        if (( installed_level < level )); then
+            bad+=("$component installed=$installed_level revoked=$level")
+        fi
+    done <<<"$revoked"
+    if (( ${#bad[@]} > 0 )); then
+        add_issue SBAT_REVOKED critical \
+            "SBAT revocations exceed installed component levels" \
+            "Components on the SBAT revocation list at levels newer than what is installed: ${bad[*]}. Reinstall shim-signed and systemd-boot-efi." true
+    fi
+}
+
+check_tpm_pcr_drift() {
+    grep -qE 'tpm2-device=' /etc/crypttab 2>/dev/null || return 0
+    local hits
+    hits=$(eval "$JOURNAL_CMD" 2>/dev/null | grep -iE 'TPM2 PCR validation failed|PCR policy did not match' | tail -3) || true
+    [[ -z $hits ]] && return 0
+    add_issue TPM_PCR_DRIFT warning \
+        "TPM2 LUKS unlock failed at boot (PCR drift)" \
+        "TPM2 unlock is configured in /etc/crypttab but recently failed. Likely cause: Secure Boot was toggled or shim/kernel changed (PCR 7 drift). Re-enroll with: systemd-cryptenroll --wipe-slot=tpm2 /dev/... && systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/..." false
+}
+
+check_sb_state
+check_lockdown
+check_cmdline_lockdown
+check_tainted
+check_dkms_state
+check_dkms_signed
+check_signature_failures
+check_efi_binaries
+check_mok_enrollment
+check_mok_pending
+check_sbat_revoked
+check_tpm_pcr_drift
+
+if (( ${#ISSUES_JSON[@]} > 0 )); then
+    issues=$(printf '%s\n' "${ISSUES_JSON[@]}" | jq -cs .)
+else
+    issues='[]'
+fi
+
+jq -nc \
+    --arg kernel "$KERNEL" \
+    --argjson issues "$issues" \
+    --arg ts "$(date -u +%FT%TZ)" \
+    '{ok: ($issues | length == 0), checked_at: $ts, kernel: $kernel, issues: $issues}'

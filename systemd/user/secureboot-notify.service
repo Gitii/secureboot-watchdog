@@ -1,0 +1,8 @@
+[Unit]
+Description=Notify the user about Secure Boot chain issues
+Documentation=https://github.com/Gitii/secureboot-watchdog
+ConditionPathExists=/run/secureboot-monitor/status.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/secureboot-notify

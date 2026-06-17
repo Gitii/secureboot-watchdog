@@ -1,0 +1,37 @@
+Source: secureboot-watchdog
+Section: admin
+Priority: optional
+Maintainer: Gitii <Gitii@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/Gitii/secureboot-watchdog
+Vcs-Git: https://github.com/Gitii/secureboot-watchdog.git
+Vcs-Browser: https://github.com/Gitii/secureboot-watchdog
+Rules-Requires-Root: no
+
+Package: secureboot-watchdog
+Architecture: all
+Depends: ${misc:Depends},
+ jq,
+ libnotify-bin,
+ zenity,
+ mokutil,
+ sbsigntool,
+ dkms,
+ policykit-1,
+ openssl,
+ kmod,
+ zstd,
+ systemd (>= 240),
+ systemd-boot
+Recommends: dracut | initramfs-tools
+Description: Secure Boot chain watchdog with GNOME notifications
+ secureboot-watchdog detects degradation of the Secure Boot chain on
+ systemd-boot machines (unsigned DKMS modules, missing MOK enrollment,
+ SBAT revocations, unsigned EFI binaries, TPM PCR drift) and offers a
+ polkit-elevated one-click fix from a native GNOME notification.
+ .
+ It runs as a system oneshot service driven by a timer, a watcher on
+ /var/lib/dkms, and a kernel postinst hook. A per-user path unit
+ watches the resulting status file and pops a notification with an
+ action button when something needs repair.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-check Secure Boot when DKMS state changes
+Documentation=https://github.com/Gitii/secureboot-watchdog
+
+[Path]
+PathChanged=/var/lib/dkms
+Unit=secureboot-monitor.service
+
+[Install]
+WantedBy=multi-user.target

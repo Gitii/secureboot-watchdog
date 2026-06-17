@@ -1,0 +1,263 @@
+#!/bin/bash
+# secureboot-fix: Apply a targeted repair for one Secure Boot chain issue.
+# Invoked as root via pkexec from the user notifier. Reads MOK password from stdin.
+set -uo pipefail
+shopt -s nullglob
+
+STATUS_FILE=${STATUS_FILE:-/run/secureboot-monitor/status.json}
+MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
+DRY_RUN=0
+CODE=""
+
+VALID_CODES="SB_DISABLED LOCKDOWN_OFF CMDLINE_LOCKDOWN_OVERRIDE UNSIGNED_MODULE_LOADED DKMS_BUILD_FAILED DKMS_UNSIGNED SIGNATURE_FAILURES EFI_UNSIGNED MOK_NOT_ENROLLED MOK_PENDING SBAT_REVOKED TPM_PCR_DRIFT"
+
+usage() { echo "usage: secureboot-fix --code <CODE> [--dry-run]" >&2; exit 2; }
+
+while (( $# )); do
+    case $1 in
+        --code) CODE=$2; shift 2;;
+        --dry-run) DRY_RUN=1; shift;;
+        -h|--help) usage;;
+        *) echo "Unknown arg: $1" >&2; usage;;
+    esac
+done
+
+[[ -z $CODE ]] && usage
+grep -qw "$CODE" <<<"$VALID_CODES" || { echo "Refusing unknown code: $CODE" >&2; exit 3; }
+
+run() {
+    if (( DRY_RUN )); then
+        printf '[dry-run] %s\n' "$*"
+    else
+        printf '+ %s\n' "$*"
+        "$@"
+    fi
+}
+
+# Pull this issue's detail back from the status file (don't trust argv for paths).
+get_detail() {
+    [[ -r $STATUS_FILE ]] || { echo ""; return; }
+    jq -r --arg c "$CODE" '.issues[] | select(.code==$c) | .detail' "$STATUS_FILE" 2>/dev/null | head -1
+}
+
+resolve_sign_file() {
+    local p
+    for p in "/usr/src/linux-headers-$(uname -r)/scripts/sign-file" \
+             "/lib/modules/$(uname -r)/build/scripts/sign-file" \
+             /usr/lib/linux-kbuild-*/scripts/sign-file; do
+        [[ -x $p ]] && { echo "$p"; return; }
+    done
+    return 1
+}
+
+# Find or generate an enrollment-ready MOK pair. Echo "<priv> <der>".
+ensure_mok_pair() {
+    mkdir -p "$MOK_DIR"
+    local priv der
+    for priv in "$MOK_DIR"/*.priv; do
+        der=${priv%.priv}.der
+        if [[ -f $priv && -f $der ]]; then
+            echo "$priv $der"; return 0
+        fi
+    done
+    # Generate
+    priv=$MOK_DIR/local.priv
+    der=$MOK_DIR/local.der
+    run openssl req -new -x509 -newkey rsa:2048 \
+        -keyout "$priv" -outform DER -out "$der" \
+        -nodes -days 3650 \
+        -subj "/CN=$(hostname) local MOK/" 2>&1
+    run chmod 600 "$priv"
+    run chown root:root "$priv" "$der"
+    echo "$priv $der"
+    # Signal that this MOK is fresh and needs enrollment
+    touch "$MOK_DIR/.local.fresh"
+}
+
+needs_uki_rebuild() {
+    [[ -d /boot/efi/EFI/Linux ]] && compgen -G "/boot/efi/EFI/Linux/*.efi" >/dev/null \
+        || [[ -d /etc/dracut.conf.d ]] && compgen -G "/etc/dracut.conf.d/*.conf" >/dev/null
+}
+
+# ---------- per-code handlers ----------
+
+fix_SB_DISABLED() {
+    cat <<EOF
+Secure Boot is disabled in firmware. This cannot be re-enabled from the OS.
+Reboot into your firmware setup (UEFI), enable Secure Boot, save & exit.
+EOF
+    return 0
+}
+
+fix_LOCKDOWN_OFF() {
+    cat <<EOF
+Kernel reports lockdown=[none] while Secure Boot is enabled — usually a kernel
+cmdline override or a custom-built kernel without lockdown support.
+Check /proc/cmdline, /etc/kernel/cmdline, and your installed kernel package.
+EOF
+    return 0
+}
+
+fix_CMDLINE_LOCKDOWN_OVERRIDE() {
+    local f=/etc/kernel/cmdline
+    [[ -f $f ]] || { echo "no /etc/kernel/cmdline — edit loader entries by hand" >&2; return 1; }
+    local cur new
+    cur=$(<"$f")
+    new=$(sed -E 's/\blockdown=none\b ?//g; s/ +$//' <<<"$cur")
+    if [[ $cur == "$new" ]]; then
+        echo "lockdown=none not found in $f" >&2; return 0
+    fi
+    if (( DRY_RUN )); then
+        printf '[dry-run] would write %s:\n  before: %s\n  after:  %s\n' "$f" "$cur" "$new"
+    else
+        printf '%s\n' "$new" >"$f"
+        run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
+    fi
+}
+
+fix_DKMS_BUILD_FAILED() {
+    run dkms autoinstall -k "$(uname -r)"
+    if needs_uki_rebuild; then
+        run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
+    fi
+}
+
+# Common path: sign all unsigned DKMS modules with the discovered/generated MOK.
+sign_dkms_modules() {
+    local sign_file pair priv der mod info ko
+    sign_file=$(resolve_sign_file) || { echo "sign-file binary not found" >&2; return 1; }
+    read -r priv der < <(ensure_mok_pair)
+    [[ -f $priv && -f $der ]] || { echo "MOK pair missing" >&2; return 1; }
+
+    # Always run dkms autoinstall first — handles .ko.zst compression cleanly.
+    run dkms autoinstall -k "$(uname -r)"
+
+    # Re-check signed status and sign any that are still missing a signer.
+    local status_out unsigned=()
+    status_out=$(dkms status -k "$(uname -r)" 2>/dev/null) || true
+    while IFS= read -r line; do
+        [[ -z $line ]] && continue
+        grep -qi 'installed' <<<"$line" || continue
+        mod=$(awk -F'[/,:]' '{print $1}' <<<"$line" | tr -d ' ')
+        local ko_name=${mod//-/_}
+        info=$(modinfo "$ko_name" 2>/dev/null) || continue
+        grep -qE '^(signer|sig_id):' <<<"$info" && continue
+        ko=$(awk '/^filename:/ {print $2}' <<<"$info")
+        unsigned+=("$ko")
+    done <<<"$status_out"
+
+    local f tmp
+    for f in "${unsigned[@]}"; do
+        [[ -f $f ]] || continue
+        if [[ $f == *.ko.zst ]]; then
+            tmp=$(mktemp --suffix=.ko)
+            run bash -c "unzstd -f -o '$tmp' '$f'"
+            run "$sign_file" sha256 "$priv" "$der" "$tmp"
+            run bash -c "zstd -19 -f -o '$f' '$tmp'"
+            run rm -f "$tmp"
+        else
+            run "$sign_file" sha256 "$priv" "$der" "$f"
+        fi
+    done
+
+    if needs_uki_rebuild; then
+        run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
+    fi
+
+    # If we just generated a fresh MOK, enroll it and return a marker for the notifier.
+    if [[ -e $MOK_DIR/.local.fresh ]]; then
+        enroll_fresh_mok "$der"
+    fi
+}
+
+fix_DKMS_UNSIGNED()       { sign_dkms_modules; }
+fix_UNSIGNED_MODULE_LOADED(){ sign_dkms_modules; }
+fix_SIGNATURE_FAILURES()  { sign_dkms_modules; }
+
+# Read a one-time MOK password from stdin and stage it with mokutil --import.
+enroll_fresh_mok() {
+    local der=$1
+    local pw
+    if ! IFS= read -r pw; then
+        echo "no MOK password on stdin — skipping mokutil --import" >&2
+        return 1
+    fi
+    if (( DRY_RUN )); then
+        printf '[dry-run] mokutil --import %s (password from stdin)\n' "$der"
+    else
+        printf '%s\n%s\n' "$pw" "$pw" | mokutil --import "$der"
+    fi
+    rm -f "$MOK_DIR/.local.fresh"
+    cat <<EOF
+
+A new local MOK was generated and queued for enrollment.
+Reboot now. At the blue "Perform MOK management" screen, choose:
+    Enroll MOK -> View key 0 -> Continue -> Yes -> (enter the password)
+Then reboot a second time to finish.
+EOF
+}
+
+fix_MOK_NOT_ENROLLED() {
+    local der
+    for der in "$MOK_DIR"/*.der; do
+        [[ -f $der ]] && { enroll_fresh_mok "$der"; return; }
+    done
+    echo "no *.der under $MOK_DIR to enroll" >&2; return 1
+}
+
+fix_MOK_PENDING() {
+    cat <<EOF
+A MOK enrollment is already queued. Reboot and complete it in MokManager.
+If you missed the window, re-run the import with: sudo mokutil --import <key.der>
+EOF
+}
+
+fix_EFI_UNSIGNED() {
+    local detail; detail=$(get_detail)
+    local files; files=$(grep -oE '/boot/efi/[^ ,]+\.[eE][fF][iI]' <<<"$detail" || true)
+    local pkgs=() pkg f
+    while IFS= read -r f; do
+        [[ -z $f ]] && continue
+        pkg=$(dpkg -S "$f" 2>/dev/null | awk -F: '{print $1}' | head -1)
+        case $pkg in
+            shim-signed|systemd-boot-efi|systemd-boot) pkgs+=("$pkg");;
+            "") echo "no owning package for $f — skipping" >&2;;
+            *) echo "refusing to reinstall non-whitelisted package: $pkg ($f)" >&2;;
+        esac
+    done <<<"$files"
+    if (( ${#pkgs[@]} == 0 )); then
+        echo "no whitelisted packages to reinstall" >&2; return 1
+    fi
+    # Dedupe
+    mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+    run apt-get install -y --reinstall "${pkgs[@]}"
+}
+
+fix_SBAT_REVOKED() {
+    run apt-get install -y --reinstall shim-signed systemd-boot-efi
+    if needs_uki_rebuild; then
+        run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
+    fi
+}
+
+fix_TPM_PCR_DRIFT() {
+    cat <<EOF
+TPM2 PCR drift detected — your LUKS volume can no longer auto-unlock.
+This is not auto-fixed (re-enrolling can lock you out if done wrong).
+Identify the LUKS device (e.g. /dev/nvme0n1p3) from /etc/crypttab, then:
+    sudo systemd-cryptenroll --wipe-slot=tpm2 /dev/<part>
+    sudo systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/<part>
+Keep your LUKS passphrase available before re-enrolling.
+EOF
+}
+
+# Dispatch
+"fix_$CODE"
+rc=$?
+
+# Refresh status so the notifier picks up the change.
+if (( ! DRY_RUN )); then
+    systemctl start --no-block secureboot-monitor.service 2>/dev/null || true
+fi
+
+exit $rc

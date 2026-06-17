@@ -1,0 +1,22 @@
+# debhelper build artifacts
+debian/.debhelper/
+debian/secureboot-watchdog/
+debian/secureboot-watchdog.*
+debian/files
+debian/*.substvars
+debian/*.log
+debian/debhelper-build-stamp
+
+# dpkg-buildpackage outputs land in the parent dir; ignore if symlinked here
+*.deb
+*.buildinfo
+*.changes
+*.tar.xz
+*.dsc
+
+# editor noise
+*.swp
+*.swo
+.idea/
+.vscode/
+.DS_Store

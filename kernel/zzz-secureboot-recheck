@@ -1,0 +1,5 @@
+#!/bin/sh
+# Trigger a Secure Boot chain re-check after kernel package transactions.
+# Runs after zz-shim and zzz-build-uki so the chain is fully rebuilt.
+systemctl start --no-block secureboot-monitor.service 2>/dev/null || true
+exit 0

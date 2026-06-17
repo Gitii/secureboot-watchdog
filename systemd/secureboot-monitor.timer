@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically check the Secure Boot chain
+Documentation=https://github.com/Gitii/secureboot-watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=secureboot-monitor.service
+
+[Install]
+WantedBy=timers.target

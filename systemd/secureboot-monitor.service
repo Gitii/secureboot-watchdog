@@ -1,0 +1,15 @@
+[Unit]
+Description=Secure Boot chain status check
+Documentation=https://github.com/Gitii/secureboot-watchdog
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RuntimeDirectory=secureboot-monitor
+RuntimeDirectoryMode=0755
+ExecStart=/bin/sh -c '/usr/sbin/secureboot-check > /run/secureboot-monitor/.status.json.tmp && mv /run/secureboot-monitor/.status.json.tmp /run/secureboot-monitor/status.json'
+ProtectSystem=strict
+ReadOnlyPaths=/
+ReadWritePaths=/run/secureboot-monitor
+PrivateTmp=yes
+ProtectHome=yes

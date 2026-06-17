@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_installsystemd:
+	dh_installsystemd --name=secureboot-monitor secureboot-monitor.service secureboot-monitor.timer
+	dh_installsystemd --name=secureboot-dkms secureboot-dkms.path
+	dh_installsystemd --user --name=secureboot-notify --no-enable secureboot-notify.path secureboot-notify.service

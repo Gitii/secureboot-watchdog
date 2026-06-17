@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Secure Boot
+Comment=Secure Boot chain watchdog notifier
+Exec=/usr/bin/secureboot-notify
+Icon=security-high
+NoDisplay=true
+Hidden=true
+Categories=System;Security;
