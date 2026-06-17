@@ -3,7 +3,8 @@
 %:
 	dh $@
 
+# dh_installsystemduser isn't part of the default dh sequence until debhelper
+# 14, so invoke it explicitly here for the user .path/.service units.
 override_dh_installsystemd:
-	dh_installsystemd --name=secureboot-monitor secureboot-monitor.service secureboot-monitor.timer
-	dh_installsystemd --name=secureboot-dkms secureboot-dkms.path
-	dh_installsystemd --user --name=secureboot-notify --no-enable secureboot-notify.path secureboot-notify.service
+	dh_installsystemd
+	dh_installsystemduser
