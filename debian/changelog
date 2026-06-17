@@ -1,3 +1,12 @@
+secureboot-watchdog (0.2) noble; urgency=medium
+
+  * secureboot-monitor.service: set RuntimeDirectoryPreserve=yes so
+    /run/secureboot-monitor/status.json survives the oneshot's exit.
+    Previously the directory was wiped as soon as the service finished,
+    leaving the user notifier nothing to read.
+
+ -- Gitii <Gitii@users.noreply.github.com>  Wed, 17 Jun 2026 10:10:00 +0000
+
 secureboot-watchdog (0.1) noble; urgency=medium
 
   * Initial release.

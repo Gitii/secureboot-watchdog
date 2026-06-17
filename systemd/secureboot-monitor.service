@@ -7,6 +7,9 @@ After=multi-user.target
 Type=oneshot
 RuntimeDirectory=secureboot-monitor
 RuntimeDirectoryMode=0755
+# Without this, systemd wipes /run/secureboot-monitor/ when this oneshot exits,
+# taking status.json with it. We need the file to persist for the user notifier.
+RuntimeDirectoryPreserve=yes
 ExecStart=/bin/sh -c '/usr/sbin/secureboot-check > /run/secureboot-monitor/.status.json.tmp && mv /run/secureboot-monitor/.status.json.tmp /run/secureboot-monitor/status.json'
 ProtectSystem=strict
 ReadOnlyPaths=/
