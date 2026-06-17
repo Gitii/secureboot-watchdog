@@ -1,3 +1,24 @@
+secureboot-watchdog (0.4) noble; urgency=medium
+
+  * check_tpm_pcr_drift: widen the journal regex to also match
+    "Failed to unseal secret using TPM2" (the actual message systemd-
+    cryptsetup logs on PCR mismatch or TPM lockout) and "tpm2.*lockout".
+    The previous regex only matched a message systemd doesn't actually
+    emit, so PCR drift went undetected even when boot unlock failed.
+  * Make TPM_PCR_DRIFT auto-fixable: secureboot-fix now re-seals the
+    LUKS keyslot against the current PCRs (7+11 by default, overridable
+    via TPM2_PCRS env var). It reads the LUKS passphrase from stdin
+    (the user notifier collects it via zenity --password before pkexec)
+    and best-effort clears any TPM dictionary-attack lockout via
+    tpm2_dictionarylockout first.
+  * Add tpm2-tools as a Recommends so the DA-lockout reset is available
+    by default.
+  * secureboot-notify: distinguish between two secret kinds — fresh MOK
+    enrollment password (asked twice) vs existing LUKS passphrase (asked
+    once) — and label the zenity dialogs accordingly.
+
+ -- Gitii <Gitii@users.noreply.github.com>  Wed, 17 Jun 2026 10:50:00 +0000
+
 secureboot-watchdog (0.3) noble; urgency=medium
 
   * check_mok_enrollment: fix false-positive MOK_NOT_ENROLLED. The check

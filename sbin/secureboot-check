@@ -198,11 +198,24 @@ check_sbat_revoked() {
 check_tpm_pcr_drift() {
     grep -qE 'tpm2-device=' /etc/crypttab 2>/dev/null || return 0
     local hits
-    hits=$(eval "$JOURNAL_CMD" 2>/dev/null | grep -iE 'TPM2 PCR validation failed|PCR policy did not match' | tail -3) || true
+    # systemd-cryptsetup logs "Failed to unseal secret using TPM2: <reason>"
+    # when the TPM refuses to release the LUKS keyslot. The two common causes
+    # are PCR drift (sealed PCR values no longer match — usually PCR 7 after
+    # a shim/kernel/MOK change) and TPM dictionary-attack lockout (repeated
+    # failed unseals push the TPM into a cooldown). Both surface here.
+    hits=$(eval "$JOURNAL_CMD" 2>/dev/null \
+        | grep -iE 'Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout' \
+        | tail -3) || true
     [[ -z $hits ]] && return 0
+
+    local lockout_hint=""
+    if grep -qiE 'lockout|operation not permitted' <<<"$hits"; then
+        lockout_hint=$'\n\nThe TPM may also be in dictionary-attack lockout from repeated failed unseals — clear it first:\n  sudo tpm2_dictionarylockout --clear-lockout'
+    fi
+
     add_issue TPM_PCR_DRIFT warning \
-        "TPM2 LUKS unlock failed at boot (PCR drift)" \
-        "TPM2 unlock is configured in /etc/crypttab but recently failed. Likely cause: Secure Boot was toggled or shim/kernel changed (PCR 7 drift). Re-enroll with: systemd-cryptenroll --wipe-slot=tpm2 /dev/... && systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/..." false
+        "TPM2 LUKS unlock failed at boot" \
+        "systemd-cryptsetup could not unseal the LUKS key from the TPM, so you had to type your passphrase. Most common cause: a sealed PCR value (usually PCR 7 — Secure Boot policy) changed since enrollment (shim/kernel update, MOK enrolled, firmware change). Recent journal lines:"$'\n'"$hits"$'\n\n'"Click Fix to re-seal the TPM2 keyslot against the current PCR values. You will be asked for your LUKS passphrase.${lockout_hint}" true
 }
 
 check_sb_state

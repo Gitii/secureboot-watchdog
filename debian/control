@@ -25,7 +25,8 @@ Depends: ${misc:Depends},
  zstd,
  systemd (>= 240),
  systemd-boot
-Recommends: dracut | initramfs-tools
+Recommends: dracut | initramfs-tools,
+ tpm2-tools
 Description: Secure Boot chain watchdog with GNOME notifications
  secureboot-watchdog detects degradation of the Secure Boot chain on
  systemd-boot machines (unsigned DKMS modules, missing MOK enrollment,
