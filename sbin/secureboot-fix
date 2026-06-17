@@ -1,6 +1,7 @@
 #!/bin/bash
 # secureboot-fix: Apply a targeted repair for one Secure Boot chain issue.
 # Invoked as root via pkexec from the user notifier. Reads MOK password from stdin.
+# shellcheck disable=SC2329  # fix_* and helper functions are dispatched indirectly
 set -uo pipefail
 shopt -s nullglob
 
@@ -124,7 +125,7 @@ fix_DKMS_BUILD_FAILED() {
 
 # Common path: sign all unsigned DKMS modules with the discovered/generated MOK.
 sign_dkms_modules() {
-    local sign_file pair priv der mod info ko
+    local sign_file priv der mod info ko
     sign_file=$(resolve_sign_file) || { echo "sign-file binary not found" >&2; return 1; }
     read -r priv der < <(ensure_mok_pair)
     [[ -f $priv && -f $der ]] || { echo "MOK pair missing" >&2; return 1; }

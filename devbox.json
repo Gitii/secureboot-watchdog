@@ -1,0 +1,37 @@
+{
+  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": [
+    "jq@latest",
+    "shellcheck@latest",
+    "libxml2@latest",
+    "dpkg@latest",
+    "debian-devscripts@latest"
+  ],
+  "shell": {
+    "init_hook": [
+      "if ! command -v dh >/dev/null; then echo 'warning: debhelper not on PATH — install with: sudo apt install debhelper lintian' >&2; fi"
+    ],
+    "scripts": {
+      "lint": [
+        "shellcheck bin/secureboot-notify sbin/secureboot-check sbin/secureboot-fix kernel/zzz-secureboot-recheck debian/postinst debian/prerm",
+        "xmllint --noout polkit/com.localhost.secureboot.fix.policy"
+      ],
+      "check": [
+        "sudo sbin/secureboot-check | jq ."
+      ],
+      "build": [
+        "debuild -us -uc -b"
+      ],
+      "lintian": [
+        "lintian --info --display-info ../secureboot-watchdog_*.deb || true"
+      ],
+      "install": [
+        "sudo apt install -y ../secureboot-watchdog_$(dpkg-parsechangelog -SVersion)_all.deb"
+      ],
+      "clean": [
+        "rm -rf debian/.debhelper debian/secureboot-watchdog debian/files debian/*.substvars debian/*.log debian/debhelper-build-stamp",
+        "rm -f ../secureboot-watchdog_*.deb ../secureboot-watchdog_*.buildinfo ../secureboot-watchdog_*.changes ../secureboot-watchdog_*.tar.* ../secureboot-watchdog_*.dsc"
+      ]
+    }
+  }
+}

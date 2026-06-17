@@ -49,6 +49,26 @@ running session.
 
 ## Build from source
 
+The project ships with a [Devbox](https://www.jetify.com/devbox) config that
+pulls in `dpkg`, `debian-devscripts` (`debuild`, `dpkg-parsechangelog`), `jq`,
+`shellcheck`, and `libxml2` (for `xmllint`) from nixpkgs. Two tools aren't in
+nixpkgs and need to come from apt — install them once:
+
+```sh
+sudo apt install debhelper lintian
+```
+
+```sh
+devbox shell                # one-time: drops you into a shell with all build deps
+devbox run lint             # shellcheck + polkit XML validation
+devbox run build            # debuild -us -uc -b → ../secureboot-watchdog_*.deb
+devbox run lintian          # run lintian on the produced .deb
+devbox run install          # apt install the freshly built .deb
+devbox run clean            # remove build artefacts
+```
+
+Or use system packages instead of Devbox if you prefer:
+
 ```sh
 sudo apt install debhelper devscripts lintian
 debuild -us -uc -b

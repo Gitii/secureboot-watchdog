@@ -14,6 +14,9 @@ debian/debhelper-build-stamp
 *.tar.xz
 *.dsc
 
+# devbox / nix
+.devbox/
+
 # editor noise
 *.swp
 *.swo

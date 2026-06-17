@@ -59,7 +59,7 @@ check_tainted() {
 
 check_dkms_state() {
     command -v dkms >/dev/null || return 0
-    local status_out modname state failed=()
+    local status_out modname failed=()
     status_out=$(dkms status -k "$KERNEL" 2>/dev/null) || return 0
     while IFS= read -r line; do
         [[ -z $line ]] && continue
@@ -129,14 +129,14 @@ check_efi_binaries() {
 
 mok_fingerprint() {
     openssl x509 -inform der -in "$1" -noout -fingerprint -sha256 2>/dev/null \
-        | sed 's/^.*=//; s/://g' | tr 'A-Z' 'a-z'
+        | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]'
 }
 
 check_mok_enrollment() {
     [[ -d $MOK_DIR ]] || return 0
     command -v openssl >/dev/null || return 0
     local enrolled missing=() der fp
-    enrolled=$(mokutil --list-enrolled 2>/dev/null | tr 'A-Z' 'a-z' | tr -d ':')
+    enrolled=$(mokutil --list-enrolled 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d ':')
     for der in "$MOK_DIR"/*.der; do
         [[ -f $der ]] || continue
         fp=$(mok_fingerprint "$der") || continue
@@ -166,7 +166,7 @@ check_sbat_revoked() {
     local shim=/usr/lib/shim/shimx64.efi.signed
     [[ -f $shim ]] || return 0
     command -v objdump >/dev/null || return 0
-    local installed revoked installed_levels revoked_levels component bad=()
+    local installed revoked component bad=()
     installed=$(objdump -j .sbat -s "$shim" 2>/dev/null | grep -E '^ [0-9a-f]+' | awk '{$1=""; print}' | tr -d '.' | head -200) || return 0
     revoked=$(mokutil --list-sbat-revocations 2>/dev/null) || true
     [[ -z $revoked || $revoked == *"empty"* ]] && return 0
