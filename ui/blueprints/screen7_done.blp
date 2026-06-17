@@ -1,0 +1,34 @@
+using Gtk 4.0;
+using Adw 1;
+
+Gtk.Box screen7_root {
+  orientation: vertical;
+  spacing: 18;
+  margin-start: 24;
+  margin-end: 24;
+  margin-top: 18;
+  margin-bottom: 18;
+
+  Adw.StatusPage status {
+    icon-name: "emblem-ok-symbolic";
+    title: _("Repair finished");
+    description: _("Reboot to verify the change took effect.");
+    vexpand: true;
+  }
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+
+    Gtk.Button later_btn {
+      label: _("Later");
+      styles ["pill"]
+    }
+
+    Gtk.Button reboot_btn {
+      label: _("Reboot now");
+      styles ["pill", "suggested-action"]
+    }
+  }
+}

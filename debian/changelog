@@ -1,3 +1,28 @@
+secureboot-watchdog (0.6) noble; urgency=medium
+
+  * Replace the bash/zenity post-notification flow with a native GTK4 +
+    libadwaita 1.5 application written in Rust (gtk4-rs 0.9, libadwaita-rs
+    0.7). Native libnotify notifications still come from
+    bin/secureboot-notify; clicking an action now opens the new app
+    (/usr/bin/secureboot-watchdog-ui) instead of zenity dialogs.
+  * The new app drives the 8-screen mockup via an AdwNavigationView:
+    overview -> details (info-only) or fix-flow (5-page Stack of
+    confirm/password/progress/success/failure). Steps in the progress
+    view come from [STEPS]/[STEP] markers now emitted by secureboot-fix
+    in each fix_* handler. LUKS passphrase / new MOK password are
+    collected via AdwPasswordEntryRow and piped to pkexec on stdin.
+  * Slim bin/secureboot-notify from ~115 lines to ~50: keep the
+    watcher + dedup hash + notify-send, drop the zenity flows.
+  * debian/control: drop zenity; add GTK4/libadwaita runtime depends;
+    add Rust/GTK build depends. Architecture: all -> any (the Rust
+    binary is amd64-specific now).
+  * Devbox: rustc, cargo, clippy, rustfmt, pkg-config, glib,
+    blueprint-compiler, gtk4.dev/libadwaita.dev/pango.dev/cairo.dev/
+    gdk-pixbuf.dev/graphene.dev/harfbuzz.dev. (.dev suffix per
+    jetify-com/devbox#2761.) debhelper + lintian still come from apt.
+
+ -- Gitii <Gitii@users.noreply.github.com>  Wed, 17 Jun 2026 12:30:00 +0000
+
 secureboot-watchdog (0.5) noble; urgency=medium
 
   * check_tpm_pcr_drift: query the system journal, not the kernel-only

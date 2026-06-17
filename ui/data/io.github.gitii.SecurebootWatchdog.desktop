@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Secure Boot
+Comment=Inspect and repair the Secure Boot chain
+Exec=/usr/bin/secureboot-watchdog-ui status
+Icon=security-high
+Categories=System;Security;
+Keywords=secure boot;mok;tpm;dkms;luks;
+StartupNotify=true

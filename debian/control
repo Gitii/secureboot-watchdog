@@ -2,7 +2,14 @@ Source: secureboot-watchdog
 Section: admin
 Priority: optional
 Maintainer: Gitii <Gitii@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 13)
+Build-Depends: debhelper-compat (= 13),
+ cargo,
+ rustc (>= 1.75),
+ libgtk-4-dev,
+ libadwaita-1-dev,
+ blueprint-compiler,
+ libglib2.0-bin,
+ pkg-config
 Standards-Version: 4.6.2
 Homepage: https://github.com/Gitii/secureboot-watchdog
 Vcs-Git: https://github.com/Gitii/secureboot-watchdog.git
@@ -10,11 +17,11 @@ Vcs-Browser: https://github.com/Gitii/secureboot-watchdog
 Rules-Requires-Root: no
 
 Package: secureboot-watchdog
-Architecture: all
+Architecture: any
 Depends: ${misc:Depends},
+ ${shlibs:Depends},
  jq,
  libnotify-bin,
- zenity,
  mokutil,
  sbsigntool,
  dkms,
@@ -24,16 +31,22 @@ Depends: ${misc:Depends},
  kmod,
  zstd,
  systemd (>= 240),
- systemd-boot
+ systemd-boot,
+ libgtk-4-1,
+ libadwaita-1-0,
+ gnome-shell | mate-polkit | polkit-kde-agent-1
 Recommends: dracut | initramfs-tools,
  tpm2-tools
-Description: Secure Boot chain watchdog with GNOME notifications
+Description: Secure Boot chain watchdog with native GNOME UI
  secureboot-watchdog detects degradation of the Secure Boot chain on
  systemd-boot machines (unsigned DKMS modules, missing MOK enrollment,
  SBAT revocations, unsigned EFI binaries, TPM PCR drift) and offers a
- polkit-elevated one-click fix from a native GNOME notification.
+ polkit-elevated one-click fix via a native libadwaita app launched
+ from a GNOME notification.
  .
- It runs as a system oneshot service driven by a timer, a watcher on
- /var/lib/dkms, and a kernel postinst hook. A per-user path unit
- watches the resulting status file and pops a notification with an
- action button when something needs repair.
+ A root system service writes the chain status to
+ /run/secureboot-monitor/status.json. A per-user path unit pops a
+ notification when something needs repair; clicking it opens the
+ GTK4/libadwaita repair app, which collects any required secret
+ (LUKS passphrase or MOK enrollment password) and runs
+ /usr/sbin/secureboot-fix through polkit.

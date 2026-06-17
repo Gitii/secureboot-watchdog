@@ -1,13 +1,12 @@
 #!/bin/bash
 # secureboot-notify: User-session notifier for the Secure Boot watchdog.
-# Reads /run/secureboot-monitor/status.json, dedupes, shows GNOME notification,
-# offers a polkit-elevated fix on click.
+# Reads /run/secureboot-monitor/status.json, dedupes, shows GNOME notification.
+# On action click, hands off to the native GNOME app (secureboot-watchdog-ui).
 set -uo pipefail
 
 STATUS_FILE=${STATUS_FILE:-/run/secureboot-monitor/status.json}
 STATE_FILE=${XDG_RUNTIME_DIR:-/tmp}/secureboot-notify.last
-MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
-FIX_BIN=/usr/sbin/secureboot-fix
+UI_BIN=${UI_BIN:-/usr/bin/secureboot-watchdog-ui}
 APP_NAME="Secure Boot"
 ICON=security-high
 
@@ -24,105 +23,34 @@ printf '%s\n' "$hash" > "$STATE_FILE"
 
 [[ $ok == "true" ]] && exit 0
 
-INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
-NEEDS_MOK_PASSWORD="MOK_NOT_ENROLLED"
-NEEDS_LUKS_PASSPHRASE="TPM_PCR_DRIFT"
-
-# First (most severe) issue drives the headline; others summarized in body.
+# Pick the first issue as headline; others surface in the app.
 first_code=$(jq -r '.issues[0].code' "$STATUS_FILE")
 first_summary=$(jq -r '.issues[0].summary' "$STATUS_FILE")
-first_detail=$(jq -r '.issues[0].detail' "$STATUS_FILE")
 issue_count=$(jq -r '.issues | length' "$STATUS_FILE")
-
 if (( issue_count > 1 )); then
     body="$first_summary (+$((issue_count - 1)) more issues)"
 else
     body="$first_summary"
 fi
 
-# Info-only path: no Fix action; just info dialog.
+INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
 if grep -qw "$first_code" <<<"$INFO_ONLY"; then
-    action=$(notify-send -w -u critical -a "$APP_NAME" -i "$ICON" \
-        "Secure Boot needs attention" "$body" \
-        -A "details=Details" -A "dismiss=Dismiss" 2>/dev/null || true)
-    case $action in
-        details)
-            jq -r '.issues[] | "[\(.code)] \(.severity)\n\(.summary)\n\(.detail)\n"' "$STATUS_FILE" \
-                | zenity --text-info --title="Secure Boot status" --width=720 --height=480 2>/dev/null || true
-            ;;
-    esac
-    exit 0
+    actions=(-A "details=Details" -A "dismiss=Dismiss")
+else
+    actions=(-A "fix=Fix now" -A "details=Details" -A "dismiss=Dismiss")
 fi
 
-# Auto-fixable path.
 action=$(notify-send -w -u critical -a "$APP_NAME" -i "$ICON" \
+    --hint=string:desktop-entry:io.github.gitii.SecurebootWatchdog \
     "Secure Boot needs attention" "$body" \
-    -A "fix=Fix now" -A "details=Details" -A "dismiss=Dismiss" 2>/dev/null || true)
+    "${actions[@]}" 2>/dev/null || true)
 
 case $action in
+    fix)
+        nohup "$UI_BIN" fix --code "$first_code" >/dev/null 2>&1 &
+        ;;
     details)
-        jq -r '.issues[] | "[\(.code)] \(.severity)\n\(.summary)\n\(.detail)\n"' "$STATUS_FILE" \
-            | zenity --text-info --title="Secure Boot status" --width=720 --height=480 2>/dev/null || true
-        exit 0
-        ;;
-    fix) ;;
-    *) exit 0 ;;
-esac
-
-zenity --question --width=520 \
-    --title="Repair Secure Boot chain" \
-    --text="<b>$first_summary</b>\n\n$first_detail\n\nRun the repair now? You will be prompted for your password." \
-    --ok-label="Repair" --cancel-label="Not now" 2>/dev/null || exit 0
-
-# Decide what kind of secret (if any) the fix needs us to collect.
-#   mok    — MOK enrollment password (new, asked twice for confirmation)
-#   luks   — existing LUKS passphrase for TPM re-enrollment (asked once)
-#   none   — no secret needed
-pw_kind=none
-if grep -qw "$first_code" <<<"$NEEDS_LUKS_PASSPHRASE"; then
-    pw_kind=luks
-elif grep -qw "$first_code" <<<"$NEEDS_MOK_PASSWORD"; then
-    pw_kind=mok
-elif ! compgen -G "$MOK_DIR/*.priv" >/dev/null 2>&1; then
-    # DKMS_UNSIGNED / SIGNATURE_FAILURES with no existing MOK pair: fix script
-    # will generate one, so collect an enrollment password up front.
-    pw_kind=mok
-fi
-
-password=""
-case $pw_kind in
-    mok)
-        while :; do
-            password=$(zenity --password --title="MOK enrollment password (new — you'll type this at MokManager on reboot)" 2>/dev/null) || exit 0
-            confirm=$(zenity --password --title="Confirm MOK enrollment password" 2>/dev/null) || exit 0
-            [[ -n $password && $password == "$confirm" ]] && break
-            zenity --error --text="Passwords did not match (or were empty). Try again." 2>/dev/null || true
-        done
-        ;;
-    luks)
-        password=$(zenity --password --title="LUKS passphrase (to re-enroll the TPM2 keyslot)" 2>/dev/null) || exit 0
-        [[ -z $password ]] && exit 0
+        nohup "$UI_BIN" details --code "$first_code" >/dev/null 2>&1 &
         ;;
 esac
-
-# Run the fix. Stream output to a temp log for the result dialog.
-log=$(mktemp -t secureboot-fix.XXXXXX)
-trap 'rm -f "$log"' EXIT
-
-if [[ $pw_kind == none ]]; then
-    pkexec "$FIX_BIN" --code "$first_code" </dev/null >"$log" 2>&1
-    rc=$?
-else
-    printf '%s\n' "$password" | pkexec "$FIX_BIN" --code "$first_code" >"$log" 2>&1
-    rc=$?
-fi
-unset password confirm
-
-if (( rc == 0 )); then
-    cat "$log" | zenity --text-info --title="Repair finished" --width=720 --height=480 2>/dev/null || true
-else
-    cat "$log" | zenity --text-info --title="Repair failed (exit $rc)" --width=720 --height=480 2>/dev/null || true
-fi
-
-# Force a re-evaluation on next status change.
-rm -f "$STATE_FILE"
+exit 0

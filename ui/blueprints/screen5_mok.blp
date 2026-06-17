@@ -1,0 +1,61 @@
+using Gtk 4.0;
+using Adw 1;
+
+Gtk.Box screen5_root {
+  orientation: vertical;
+  spacing: 18;
+  margin-start: 24;
+  margin-end: 24;
+  margin-top: 18;
+  margin-bottom: 18;
+
+  Gtk.Label title {
+    label: _("Create a one-time MOK enrollment password");
+    halign: start;
+    wrap: true;
+    styles ["title-2"]
+  }
+
+  Gtk.Label subtitle {
+    label: _("You'll type this same password at the blue MokManager screen on the next reboot to finish enrollment. Write it down — you can't recover it.");
+    halign: start;
+    wrap: true;
+    styles ["dim-label"]
+  }
+
+  Adw.PreferencesGroup {
+    Adw.PasswordEntryRow password_row {
+      title: _("New password");
+      show-apply-button: false;
+    }
+
+    Adw.PasswordEntryRow confirm_row {
+      title: _("Confirm");
+      show-apply-button: false;
+    }
+  }
+
+  Gtk.Label mismatch_label {
+    label: _("Passwords don't match.");
+    halign: start;
+    visible: false;
+    styles ["error", "caption"]
+  }
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+
+    Gtk.Button cancel_btn {
+      label: _("Cancel");
+      styles ["pill"]
+    }
+
+    Gtk.Button enroll_btn {
+      label: _("Enroll & reboot…");
+      sensitive: false;
+      styles ["pill", "suggested-action"]
+    }
+  }
+}

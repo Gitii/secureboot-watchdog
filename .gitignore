@@ -26,3 +26,6 @@ debian/debhelper-build-stamp
 .idea/
 .vscode/
 .DS_Store
+
+# Rust UI build artefacts
+ui/target/

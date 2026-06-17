@@ -1,0 +1,29 @@
+using Gtk 4.0;
+using Adw 1;
+
+Gtk.Box screen2_root {
+  orientation: vertical;
+  spacing: 0;
+
+  Adw.PreferencesPage {
+    Adw.PreferencesGroup {
+      title: bind summary_label.label;
+
+      Adw.PreferencesGroup issue_list_group {
+      }
+    }
+  }
+
+  Gtk.Label summary_label {
+    label: "—";
+    visible: false;
+  }
+
+  Gtk.Label footer {
+    label: "—";
+    margin-top: 4;
+    margin-bottom: 18;
+    halign: center;
+    styles ["dim-label", "caption"]
+  }
+}

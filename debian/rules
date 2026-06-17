@@ -1,7 +1,27 @@
 #!/usr/bin/make -f
 
+# If devbox-managed tools are present in the build tree, expose them to the
+# sub-make / sub-shells that dpkg-buildpackage spawns (these otherwise inherit
+# only the system PATH and miss rustc/cargo/blueprint-compiler).
+DEVBOX_BIN := $(CURDIR)/.devbox/nix/profile/default/bin
+DEVBOX_PC  := $(CURDIR)/.devbox/nix/profile/default/lib/pkgconfig:$(CURDIR)/.devbox/nix/profile/default/share/pkgconfig
+ifneq ("$(wildcard $(DEVBOX_BIN)/cargo)","")
+    export PATH := $(DEVBOX_BIN):$(PATH)
+    export PKG_CONFIG_PATH := $(DEVBOX_PC):$(PKG_CONFIG_PATH)
+endif
+
+# Standard dh sequence, plus a cargo build for the UI binary.
 %:
 	dh $@
+
+# Build the Rust UI binary. build.rs handles blueprint-compiler and
+# glib-compile-resources for the embedded gresource bundle.
+override_dh_auto_build:
+	cd ui && cargo build --release --locked
+
+override_dh_auto_clean:
+	-cd ui && cargo clean
+	dh_auto_clean
 
 # dh_installsystemduser isn't part of the default dh sequence until debhelper
 # 14, so invoke it explicitly here for the user .path/.service units.

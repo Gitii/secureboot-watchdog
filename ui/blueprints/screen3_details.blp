@@ -1,0 +1,75 @@
+using Gtk 4.0;
+
+Gtk.Box screen3_root {
+  orientation: vertical;
+  spacing: 18;
+  margin-start: 24;
+  margin-end: 24;
+  margin-top: 18;
+  margin-bottom: 18;
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 14;
+
+    Gtk.Image severity_icon {
+      icon-name: "dialog-warning-symbolic";
+      pixel-size: 28;
+      styles ["severity-icon", "severity-warning"]
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 2;
+      hexpand: true;
+      valign: center;
+
+      Gtk.Label headline {
+        label: "—";
+        halign: start;
+        wrap: true;
+        styles ["title-3"]
+      }
+
+      Gtk.Label severity_caption {
+        label: "—";
+        halign: start;
+        styles ["issue-subtitle"]
+      }
+    }
+  }
+
+  Gtk.ScrolledWindow {
+    vexpand: true;
+    hscrollbar-policy: never;
+    has-frame: true;
+
+    Gtk.TextView detail_view {
+      editable: false;
+      cursor-visible: false;
+      wrap-mode: word_char;
+      left-margin: 12;
+      right-margin: 12;
+      top-margin: 12;
+      bottom-margin: 12;
+      monospace: false;
+    }
+  }
+
+  Gtk.Box action_box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+
+    Gtk.Button dismiss_btn {
+      label: _("Got it");
+      styles ["pill"]
+    }
+
+    Gtk.Button fix_btn {
+      label: _("Fix now");
+      visible: false;
+      styles ["pill", "suggested-action"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/gitii/SecurebootWatchdog">
+    <file compressed="true">screen1_healthy.ui</file>
+    <file compressed="true">screen2_issues.ui</file>
+    <file compressed="true">screen3_details.ui</file>
+    <file compressed="true">screen4_luks.ui</file>
+    <file compressed="true">screen5_mok.ui</file>
+    <file compressed="true">screen6_progress.ui</file>
+    <file compressed="true">screen7_done.ui</file>
+    <file compressed="true">screen8_failed.ui</file>
+    <file compressed="true" alias="style.css">style.css</file>
+  </gresource>
+</gresources>

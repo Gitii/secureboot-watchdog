@@ -35,6 +35,12 @@ run() {
     fi
 }
 
+# Emit progress markers parsed by the GNOME UI:
+#   [STEPS] step_a|step_b|step_c   — declares the step list up front
+#   [STEP] step_b                   — current step advances to step_b
+steps_declare() { echo "[STEPS] $*"; }
+step_enter()    { echo "[STEP] $1"; }
+
 # Pull this issue's detail back from the status file (don't trust argv for paths).
 get_detail() {
     [[ -r $STATUS_FILE ]] || { echo ""; return; }
@@ -100,6 +106,7 @@ EOF
 }
 
 fix_CMDLINE_LOCKDOWN_OVERRIDE() {
+    steps_declare "edit-cmdline|rebuild-uki"
     local f=/etc/kernel/cmdline
     [[ -f $f ]] || { echo "no /etc/kernel/cmdline — edit loader entries by hand" >&2; return 1; }
     local cur new
@@ -108,28 +115,36 @@ fix_CMDLINE_LOCKDOWN_OVERRIDE() {
     if [[ $cur == "$new" ]]; then
         echo "lockdown=none not found in $f" >&2; return 0
     fi
+    step_enter "edit-cmdline"
     if (( DRY_RUN )); then
         printf '[dry-run] would write %s:\n  before: %s\n  after:  %s\n' "$f" "$cur" "$new"
     else
         printf '%s\n' "$new" >"$f"
-        run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
     fi
+    step_enter "rebuild-uki"
+    run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
 }
 
 fix_DKMS_BUILD_FAILED() {
+    steps_declare "dkms-autoinstall|rebuild-uki"
+    step_enter "dkms-autoinstall"
     run dkms autoinstall -k "$(uname -r)"
     if needs_uki_rebuild; then
+        step_enter "rebuild-uki"
         run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
     fi
 }
 
 # Common path: sign all unsigned DKMS modules with the discovered/generated MOK.
 sign_dkms_modules() {
+    steps_declare "prepare-mok|dkms-autoinstall|sign-modules|rebuild-uki|enroll-mok"
     local sign_file priv der mod info ko
     sign_file=$(resolve_sign_file) || { echo "sign-file binary not found" >&2; return 1; }
+    step_enter "prepare-mok"
     read -r priv der < <(ensure_mok_pair)
     [[ -f $priv && -f $der ]] || { echo "MOK pair missing" >&2; return 1; }
 
+    step_enter "dkms-autoinstall"
     # Always run dkms autoinstall first — handles .ko.zst compression cleanly.
     run dkms autoinstall -k "$(uname -r)"
 
@@ -147,6 +162,7 @@ sign_dkms_modules() {
         unsigned+=("$ko")
     done <<<"$status_out"
 
+    step_enter "sign-modules"
     local f tmp
     for f in "${unsigned[@]}"; do
         [[ -f $f ]] || continue
@@ -162,11 +178,13 @@ sign_dkms_modules() {
     done
 
     if needs_uki_rebuild; then
+        step_enter "rebuild-uki"
         run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
     fi
 
     # If we just generated a fresh MOK, enroll it and return a marker for the notifier.
     if [[ -e $MOK_DIR/.local.fresh ]]; then
+        step_enter "enroll-mok"
         enroll_fresh_mok "$der"
     fi
 }
@@ -199,6 +217,8 @@ EOF
 }
 
 fix_MOK_NOT_ENROLLED() {
+    steps_declare "enroll-mok"
+    step_enter "enroll-mok"
     local der
     for der in "$MOK_DIR"/*.der; do
         [[ -f $der ]] && { enroll_fresh_mok "$der"; return; }
@@ -214,6 +234,8 @@ EOF
 }
 
 fix_EFI_UNSIGNED() {
+    steps_declare "identify-packages|reinstall"
+    step_enter "identify-packages"
     local detail; detail=$(get_detail)
     local files; files=$(grep -oE '/boot/efi/[^ ,]+\.[eE][fF][iI]' <<<"$detail" || true)
     local pkgs=() pkg f
@@ -231,12 +253,16 @@ fix_EFI_UNSIGNED() {
     fi
     # Dedupe
     mapfile -t pkgs < <(printf '%s\n' "${pkgs[@]}" | sort -u)
+    step_enter "reinstall"
     run apt-get install -y --reinstall "${pkgs[@]}"
 }
 
 fix_SBAT_REVOKED() {
+    steps_declare "reinstall|rebuild-uki"
+    step_enter "reinstall"
     run apt-get install -y --reinstall shim-signed systemd-boot-efi
     if needs_uki_rebuild; then
+        step_enter "rebuild-uki"
         run kernel-install add "$(uname -r)" "/boot/vmlinuz-$(uname -r)"
     fi
 }
@@ -260,6 +286,7 @@ find_luks_tpm_device() {
 }
 
 fix_TPM_PCR_DRIFT() {
+    steps_declare "clear-lockout|wipe-old-slot|seal-new-slot|finalize"
     local pw dev keyfile pcrs=${TPM2_PCRS:-7+11}
 
     if ! IFS= read -r pw; then
@@ -272,6 +299,7 @@ fix_TPM_PCR_DRIFT() {
     }
     echo "Re-sealing TPM2 keyslot on $dev against PCRs $pcrs"
 
+    step_enter "clear-lockout"
     # Best-effort: clear TPM dictionary-attack lockout. May fail if lockout
     # hierarchy has an auth password set — that's the user's TPM admin
     # password and we don't know it; continue regardless.
@@ -289,15 +317,21 @@ fix_TPM_PCR_DRIFT() {
     trap 'rm -f "$keyfile"' RETURN
 
     if (( DRY_RUN )); then
+        step_enter "wipe-old-slot"
         echo "[dry-run] systemd-cryptenroll --unlock-key-file=<luks-passphrase> --wipe-slot=tpm2 $dev"
+        step_enter "seal-new-slot"
         echo "[dry-run] systemd-cryptenroll --unlock-key-file=<luks-passphrase> --tpm2-device=auto --tpm2-pcrs=$pcrs $dev"
+        step_enter "finalize"
         return 0
     fi
 
+    step_enter "wipe-old-slot"
     # Wipe-slot may fail if no TPM2 slot currently exists — that's OK, log and continue.
     systemd-cryptenroll --unlock-key-file="$keyfile" --wipe-slot=tpm2 "$dev" \
         || echo "(wipe-slot: no existing TPM2 slot to remove, or wipe failed — continuing)"
+    step_enter "seal-new-slot"
     systemd-cryptenroll --unlock-key-file="$keyfile" --tpm2-device=auto --tpm2-pcrs="$pcrs" "$dev"
+    step_enter "finalize"
 }
 
 # Dispatch

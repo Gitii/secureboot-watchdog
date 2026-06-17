@@ -1,0 +1,52 @@
+using Gtk 4.0;
+
+Gtk.Box screen6_root {
+  orientation: vertical;
+  spacing: 18;
+  margin-start: 24;
+  margin-end: 24;
+  margin-top: 18;
+  margin-bottom: 18;
+
+  Gtk.Label title {
+    label: _("Repairing…");
+    halign: start;
+    styles ["title-2"]
+  }
+
+  Gtk.Box step_list_box {
+    orientation: vertical;
+    spacing: 4;
+  }
+
+  Gtk.Expander log_expander {
+    label: _("Show log");
+    expanded: false;
+
+    Gtk.ScrolledWindow {
+      min-content-height: 160;
+      max-content-height: 240;
+      hscrollbar-policy: automatic;
+      has-frame: true;
+
+      Gtk.TextView log_view {
+        editable: false;
+        cursor-visible: false;
+        monospace: true;
+        wrap-mode: none;
+        styles ["log-view"]
+      }
+    }
+  }
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+
+    Gtk.Button cancel_btn {
+      label: _("Cancel");
+      styles ["pill"]
+    }
+  }
+}

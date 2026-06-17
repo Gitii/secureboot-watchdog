@@ -1,0 +1,72 @@
+/* Severity-tinted icon backplates for IssueRow.
+   Order matches the mockup: red triangle for critical, amber for warning,
+   blue circle for info. */
+
+.severity-icon {
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: 8px;
+    padding: 7px;
+}
+
+.severity-critical {
+    color: #e01b24;
+    background-color: alpha(#e01b24, 0.13);
+}
+
+.severity-warning {
+    color: #c66400;
+    background-color: alpha(#e5a50a, 0.20);
+}
+
+.severity-info {
+    color: #1c71d8;
+    background-color: alpha(#3584e4, 0.13);
+}
+
+/* StepList rows */
+
+.step-row {
+    padding: 6px 0;
+}
+
+.step-row .step-icon {
+    min-width: 20px;
+    min-height: 20px;
+}
+
+.step-row.step-done .step-icon {
+    color: #26a269;
+}
+
+.step-row.step-pending .step-icon {
+    color: alpha(currentColor, 0.35);
+}
+
+.step-row.step-failed .step-icon {
+    color: #e01b24;
+}
+
+/* Compact log expander inside the progress page */
+
+.log-view {
+    font-family: monospace;
+    font-size: 12px;
+    padding: 8px;
+}
+
+/* Card framing used for issue rows and details boxes */
+
+.issue-card {
+    background-color: @card_bg_color;
+    border-radius: 12px;
+    border: 1px solid alpha(currentColor, 0.08);
+}
+
+/* The little subtitle row ("Critical · Reboot required after fix") */
+
+.issue-subtitle {
+    font-size: 12px;
+    color: alpha(currentColor, 0.55);
+    margin-top: 2px;
+}

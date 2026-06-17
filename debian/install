@@ -9,3 +9,13 @@ systemd/user/secureboot-notify.path lib/systemd/user
 kernel/zzz-secureboot-recheck etc/kernel/postinst.d
 polkit/com.localhost.secureboot.fix.policy usr/share/polkit-1/actions
 desktop/secureboot-notify.desktop usr/share/applications
+ui/target/release/secureboot-watchdog-ui usr/bin
+ui/data/io.github.gitii.SecurebootWatchdog.desktop usr/share/applications
+ui/fixtures/screen1_healthy.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen2_multi.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen3_info_sb_disabled.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen4_luks_tpm.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen5_mok_signature.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen6_progress.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen7_done.json usr/share/secureboot-watchdog/fixtures
+ui/fixtures/screen8_failed.json usr/share/secureboot-watchdog/fixtures

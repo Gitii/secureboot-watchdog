@@ -1,0 +1,13 @@
+using Gtk 4.0;
+using Adw 1;
+
+Adw.StatusPage screen1_root {
+  icon-name: "security-high-symbolic";
+  title: _("All clear");
+  description: _("Your Secure Boot chain is healthy.");
+
+  child: Gtk.Label footer {
+    label: "Kernel —";
+    styles ["dim-label", "caption"]
+  };
+}

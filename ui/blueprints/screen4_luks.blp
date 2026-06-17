@@ -1,0 +1,48 @@
+using Gtk 4.0;
+using Adw 1;
+
+Gtk.Box screen4_root {
+  orientation: vertical;
+  spacing: 18;
+  margin-start: 24;
+  margin-end: 24;
+  margin-top: 18;
+  margin-bottom: 18;
+
+  Gtk.Label title {
+    label: _("LUKS passphrase");
+    halign: start;
+    styles ["title-2"]
+  }
+
+  Gtk.Label subtitle {
+    label: _("Enter the passphrase you type at boot. It's used to re-seal the TPM2 keyslot and is not stored.");
+    halign: start;
+    wrap: true;
+    styles ["dim-label"]
+  }
+
+  Adw.PreferencesGroup {
+    Adw.PasswordEntryRow passphrase_row {
+      title: _("Passphrase");
+      show-apply-button: false;
+    }
+  }
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+
+    Gtk.Button cancel_btn {
+      label: _("Cancel");
+      styles ["pill"]
+    }
+
+    Gtk.Button continue_btn {
+      label: _("Continue");
+      sensitive: false;
+      styles ["pill", "suggested-action"]
+    }
+  }
+}
