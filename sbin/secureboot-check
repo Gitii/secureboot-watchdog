@@ -127,23 +127,29 @@ check_efi_binaries() {
     fi
 }
 
-mok_fingerprint() {
-    openssl x509 -inform der -in "$1" -noout -fingerprint -sha256 2>/dev/null \
-        | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]'
+mok_fingerprints() {
+    # mokutil --list-enrolled prints SHA-1 on Ubuntu noble, but some distros
+    # print SHA-256. Emit both so the caller can match either.
+    local alg
+    for alg in sha1 sha256; do
+        openssl x509 -inform der -in "$1" -noout -fingerprint -"$alg" 2>/dev/null \
+            | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]'
+    done
 }
 
 check_mok_enrollment() {
     [[ -d $MOK_DIR ]] || return 0
     command -v openssl >/dev/null || return 0
-    local enrolled missing=() der fp
+    local enrolled missing=() der fp found
     enrolled=$(mokutil --list-enrolled 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -d ':')
     for der in "$MOK_DIR"/*.der; do
         [[ -f $der ]] || continue
-        fp=$(mok_fingerprint "$der") || continue
-        [[ -z $fp ]] && continue
-        if ! grep -q "$fp" <<<"$enrolled"; then
-            missing+=("$(basename "$der")")
-        fi
+        found=0
+        while IFS= read -r fp; do
+            [[ -z $fp ]] && continue
+            grep -q "$fp" <<<"$enrolled" && { found=1; break; }
+        done < <(mok_fingerprints "$der")
+        (( found )) || missing+=("$(basename "$der")")
     done
     if (( ${#missing[@]} > 0 )); then
         add_issue MOK_NOT_ENROLLED critical \

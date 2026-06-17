@@ -1,3 +1,13 @@
+secureboot-watchdog (0.3) noble; urgency=medium
+
+  * check_mok_enrollment: fix false-positive MOK_NOT_ENROLLED. The check
+    was computing the SHA-256 fingerprint of each MOK .der and searching
+    for it in the `mokutil --list-enrolled` output, but mokutil on noble
+    only prints SHA-1 fingerprints — so the check always failed. Now
+    compute both SHA-1 and SHA-256 and match either.
+
+ -- Gitii <Gitii@users.noreply.github.com>  Wed, 17 Jun 2026 10:30:00 +0000
+
 secureboot-watchdog (0.2) noble; urgency=medium
 
   * secureboot-monitor.service: set RuntimeDirectoryPreserve=yes so
