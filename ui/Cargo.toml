@@ -2,7 +2,7 @@
 name = "secureboot-watchdog-ui"
 version = "0.6.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 license = "MIT"
 description = "Native libadwaita UI for the Secure Boot watchdog post-notification fix flow"
 repository = "https://github.com/Gitii/secureboot-watchdog"
