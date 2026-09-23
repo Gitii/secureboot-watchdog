@@ -1,5 +1,13 @@
 #!/usr/bin/make -f
 
+# Ubuntu 24.04's default cargo (1.75) cannot build edition-2024 crates such
+# as clap_lex 1.1, so Build-Depends fall back to the versioned toolchain there,
+# which is installed outside PATH. Added before the devbox block, whose
+# toolchain still takes precedence when present.
+ifneq ("$(wildcard /usr/lib/rust-1.91/bin/cargo)","")
+    export PATH := /usr/lib/rust-1.91/bin:$(PATH)
+endif
+
 # If devbox-managed tools are present in the build tree, expose them to the
 # sub-make / sub-shells that dpkg-buildpackage spawns (these otherwise inherit
 # only the system PATH and miss rustc/cargo/blueprint-compiler).
