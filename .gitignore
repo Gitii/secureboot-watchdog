@@ -29,3 +29,6 @@ debian/debhelper-build-stamp
 
 # Rust UI build artefacts
 ui/target/
+
+# Output of packaging/build-debs.sh
+dist/
