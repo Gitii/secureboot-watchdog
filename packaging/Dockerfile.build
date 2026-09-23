@@ -1,0 +1,11 @@
+# Build environment for packaging/build-debs.sh. Built once per target
+# release; Build-Depends come from debian/control, the single source of truth.
+ARG UBUNTU_VERSION=26.04
+FROM ubuntu:${UBUNTU_VERSION}
+ENV DEBIAN_FRONTEND=noninteractive
+COPY control /tmp/pkg/debian/control
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential dpkg-dev fakeroot ca-certificates \
+ && apt-get build-dep -y /tmp/pkg \
+ && rm -rf /var/lib/apt/lists/* /tmp/pkg
+WORKDIR /build

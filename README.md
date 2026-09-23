@@ -70,9 +70,18 @@ devbox run clean            # remove build artefacts
 Or use system packages instead of Devbox if you prefer:
 
 ```sh
-sudo apt install debhelper devscripts lintian
+sudo apt install devscripts lintian
+sudo apt build-dep .        # Build-Depends from debian/control
 debuild -us -uc -b
-sudo apt install ../secureboot-watchdog_0.1_all.deb
+sudo apt install ../secureboot-watchdog_*_amd64.deb
+```
+
+To build packages for Ubuntu 24.04 and 26.04 in clean Docker containers,
+from the committed tree and with nothing installed on the host:
+
+```sh
+packaging/build-debs.sh     # both; or: noble | resolute
+sudo apt install ./dist/debs/resolute/secureboot-watchdog_*.deb
 ```
 
 ## Uninstall
