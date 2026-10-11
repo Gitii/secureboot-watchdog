@@ -1,3 +1,19 @@
+secureboot-watchdog (0.7.0) unstable; urgency=medium
+
+  * Release packaging: the Build workflow builds, lints and tests one .deb
+    per supported Ubuntu (24.04, 26.04) on GitHub runners, installs it,
+    and attaches it to a GitHub release on v* tags. A Makefile carries
+    every step (make check / lint / deb / install). Drop the Devbox
+    environment and the container build script.
+  * Notifications: Details and Fix now open the app again (it was killed
+    with the notifier's service). A notification is withdrawn when a
+    later check no longer reports its issue. The user .path unit no longer
+    re-triggers itself until systemd's trigger limit stops it.
+  * App: fall back to the overview when the notified issue has cleared;
+    every launch opens its own window.
+
+ -- Gitii <gitii@users.noreply.github.com>  Sun, 11 Oct 2026 10:45:30 +0000
+
 secureboot-watchdog (0.6) noble; urgency=medium
 
   * Replace the bash/zenity post-notification flow with a native GTK4 +

@@ -17,9 +17,6 @@ debian/debhelper-build-stamp
 *.tar.xz
 *.dsc
 
-# devbox / nix
-.devbox/
-
 # editor noise
 *.swp
 *.swo
@@ -30,5 +27,5 @@ debian/debhelper-build-stamp
 # Rust UI build artefacts
 ui/target/
 
-# Output of packaging/build-debs.sh
+# Output of make deb
 dist/

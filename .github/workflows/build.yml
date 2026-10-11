@@ -1,0 +1,94 @@
+name: Build
+
+# Builds, tests and packages secureboot-watchdog on the GitHub-hosted Ubuntu
+# 24.04 and 26.04 runners, installs each .deb and smoke-tests the installed
+# package, and attaches the .deb files to a GitHub release when a v* tag is
+# pushed. Every step is a make target or script that also runs locally; see
+# README.md.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies and linters
+        run: |
+          sudo apt-get update
+          sudo apt-get build-dep -y ./
+          sudo apt-get install -y --no-install-recommends shellcheck libxml2-utils rustfmt rust-clippy
+      - run: make lint
+
+  deb:
+    name: deb (Ubuntu ${{ matrix.ubuntu }})
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['24.04', '26.04']
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies (from debian/control) and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get build-dep -y ./
+          sudo apt-get install -y --no-install-recommends devscripts lintian jq
+
+      - name: Unit tests, version
+        run: make check
+
+      - name: Set package version
+        run: scripts/ci-set-version.sh
+
+      - name: Build .deb
+        run: |
+          make deb
+          dpkg -I dist/secureboot-watchdog_*.deb
+          lintian --fail-on error --tag-display-limit 0 dist/secureboot-watchdog_*.deb
+
+      - name: Install the .deb and smoke-test the installed package
+        run: |
+          sudo apt-get install -y --no-install-recommends ./dist/secureboot-watchdog_*.deb
+          make check-installed
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-ubuntu-${{ matrix.ubuntu }}
+          path: dist/secureboot-watchdog_*.deb
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, deb]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+          generate_release_notes: true
