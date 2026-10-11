@@ -81,7 +81,9 @@ pub fn run() -> glib::ExitCode {
 
     let app = adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gio::ApplicationFlags::FLAGS_NONE)
+        // Every launch routes from its own arguments (`details --code …`), which
+        // a unique instance would drop when forwarding to the running one.
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     app.connect_startup(|_| {
@@ -115,8 +117,14 @@ fn dispatch(app: &adw::Application, cli: &Cli) -> anyhow::Result<()> {
     let status = load_status_with_mock(cli)?;
     let route = match &cli.cmd {
         None | Some(Cmd::Status) => InitialRoute::Overview,
-        Some(Cmd::Details { code }) => InitialRoute::Details(find_issue(&status, code)?),
-        Some(Cmd::Fix { code }) => InitialRoute::Fix(find_issue(&status, code)?),
+        // The issue may have cleared since the notification was shown; the
+        // overview then shows the current state.
+        Some(Cmd::Details { code }) => {
+            find_issue(&status, code).map_or(InitialRoute::Overview, InitialRoute::Details)
+        }
+        Some(Cmd::Fix { code }) => {
+            find_issue(&status, code).map_or(InitialRoute::Overview, InitialRoute::Fix)
+        }
     };
     let win = SecurebootWindow::build(app, status, route);
     present_window(&win);
@@ -132,13 +140,8 @@ fn load_status_with_mock(cli: &Cli) -> anyhow::Result<Status> {
     load_status(&path).map_err(|e| anyhow::anyhow!("loading status from {}: {e}", path.display()))
 }
 
-fn find_issue(status: &Status, code: &str) -> anyhow::Result<Issue> {
-    status
-        .issues
-        .iter()
-        .find(|i| i.code == code)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("status does not contain issue with code {code}"))
+fn find_issue(status: &Status, code: &str) -> Option<Issue> {
+    status.issues.iter().find(|i| i.code == code).cloned()
 }
 
 fn present_window(win: &adw::ApplicationWindow) {

@@ -30,9 +30,3 @@ override_dh_auto_build:
 override_dh_auto_clean:
 	-cd ui && cargo clean
 	dh_auto_clean
-
-# dh_installsystemduser isn't part of the default dh sequence until debhelper
-# 14, so invoke it explicitly here for the user .path/.service units.
-override_dh_installsystemd:
-	dh_installsystemd
-	dh_installsystemduser

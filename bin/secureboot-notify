@@ -2,13 +2,53 @@
 # secureboot-notify: User-session notifier for the Secure Boot watchdog.
 # Reads /run/secureboot-monitor/status.json, dedupes, shows GNOME notification.
 # On action click, hands off to the native GNOME app (secureboot-watchdog-ui).
+#
+#   secureboot-notify                     react to the current status file
+#   secureboot-notify --popup CODE BODY   show the notification, wait for a click
+#
+# The popup runs in its own transient unit ($POPUP_UNIT), so this script
+# returns at once and the next status change can withdraw a stale popup.
 set -uo pipefail
 
 STATUS_FILE=${STATUS_FILE:-/run/secureboot-monitor/status.json}
 STATE_FILE=${XDG_RUNTIME_DIR:-/tmp}/secureboot-notify.last
 UI_BIN=${UI_BIN:-/usr/bin/secureboot-watchdog-ui}
+POPUP_UNIT=secureboot-notify-popup.service
 APP_NAME="Secure Boot"
 ICON=security-high
+INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
+
+popup() {
+    local code=$1 body=$2 actions action interrupted=0
+    # SIGINT means the popup unit was stopped: by a newer status, which
+    # records its own state, or by the session ending. Forget the state so
+    # the next login shows the issue again.
+    trap 'interrupted=1' INT
+    if grep -qw "$code" <<<"$INFO_ONLY"; then
+        actions=(-A "details=Details" -A "dismiss=Dismiss")
+    else
+        actions=(-A "fix=Fix now" -A "details=Details" -A "dismiss=Dismiss")
+    fi
+
+    action=$(notify-send -w -u critical -a "$APP_NAME" -i "$ICON" \
+        --hint=string:desktop-entry:io.github.gitii.SecurebootWatchdog \
+        "Secure Boot needs attention" "$body" \
+        "${actions[@]}" 2>/dev/null || true)
+    (( interrupted )) && rm -f "$STATE_FILE"
+
+    # The UI gets its own unit: systemd kills whatever is left in the popup
+    # unit's cgroup once this script exits.
+    case $action in
+        fix|details)
+            systemd-run --user --collect --quiet "$UI_BIN" "$action" --code "$code"
+            ;;
+    esac
+}
+
+if [[ ${1:-} == --popup ]]; then
+    popup "$2" "$3"
+    exit 0
+fi
 
 [[ -r $STATUS_FILE ]] || exit 0
 command -v jq >/dev/null || exit 0
@@ -19,6 +59,11 @@ hash=$(printf '%s\n%s' "$ok" "$codes" | sha256sum | cut -d' ' -f1)
 last=$(cat "$STATE_FILE" 2>/dev/null || true)
 
 [[ $hash == "$last" ]] && exit 0
+
+# The status changed, so whatever is on screen is stale. notify-send closes
+# its notification on SIGINT, the popup unit's KillSignal. Stop it before
+# recording the new state, which the stopped popup would otherwise remove.
+systemctl --user stop "$POPUP_UNIT" 2>/dev/null || true
 printf '%s\n' "$hash" > "$STATE_FILE"
 
 [[ $ok == "true" ]] && exit 0
@@ -33,24 +78,8 @@ else
     body="$first_summary"
 fi
 
-INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
-if grep -qw "$first_code" <<<"$INFO_ONLY"; then
-    actions=(-A "details=Details" -A "dismiss=Dismiss")
-else
-    actions=(-A "fix=Fix now" -A "details=Details" -A "dismiss=Dismiss")
-fi
-
-action=$(notify-send -w -u critical -a "$APP_NAME" -i "$ICON" \
-    --hint=string:desktop-entry:io.github.gitii.SecurebootWatchdog \
-    "Secure Boot needs attention" "$body" \
-    "${actions[@]}" 2>/dev/null || true)
-
-case $action in
-    fix)
-        nohup "$UI_BIN" fix --code "$first_code" >/dev/null 2>&1 &
-        ;;
-    details)
-        nohup "$UI_BIN" details --code "$first_code" >/dev/null 2>&1 &
-        ;;
-esac
+# Forget the status if the popup can't start, so the next run retries.
+systemd-run --user --collect --quiet --expand-environment=no \
+    --unit="$POPUP_UNIT" -p KillSignal=SIGINT -p PartOf=graphical-session.target \
+    "$(realpath "$0")" --popup "$first_code" "$body" || rm -f "$STATE_FILE"
 exit 0
