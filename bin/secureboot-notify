@@ -72,6 +72,8 @@ else
     body="$first_summary"
 fi
 
-systemd-run --user --collect --quiet --unit="$POPUP_UNIT" -p KillSignal=SIGINT \
-    "$(realpath "$0")" --popup "$first_code" "$body"
+# Forget the status if the popup can't start, so the next run retries.
+systemd-run --user --collect --quiet --expand-environment=no \
+    --unit="$POPUP_UNIT" -p KillSignal=SIGINT \
+    "$(realpath "$0")" --popup "$first_code" "$body" || rm -f "$STATE_FILE"
 exit 0
