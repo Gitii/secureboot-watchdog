@@ -39,13 +39,14 @@ lint:
 	cd $(UI) && cargo clippy --all-targets --locked -- -D warnings
 
 # Binary package only; dpkg-buildpackage writes to the parent directory, so
-# collect this package's files in $(DIST)/.
+# collect this build's files (by version) in $(DIST)/.
 deb:
 	dpkg-buildpackage -us -uc -b
 	mkdir -p $(DIST)
-	for f in ../secureboot-watchdog_* ../secureboot-watchdog-dbgsym_*; do \
-	  [ ! -e "$$f" ] || mv "$$f" $(DIST)/; \
-	done
+	@ver="$$(dpkg-parsechangelog -S Version)"; \
+	  for f in ../secureboot-watchdog_"$$ver"_* ../secureboot-watchdog-dbgsym_"$$ver"_*; do \
+	    [ ! -e "$$f" ] || mv "$$f" $(DIST)/; \
+	  done
 	@ls -l $(DIST)
 
 install: deb

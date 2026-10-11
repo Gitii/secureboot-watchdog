@@ -16,7 +16,8 @@ export DEBFULLNAME="${DEBFULLNAME:-Gitii}"
 
 upstream="$(dpkg-parsechangelog -S Version)"
 ref="${GITHUB_REF:-$(git symbolic-ref -q HEAD || true)}"
-sha="${GITHUB_SHA:-$(git rev-parse HEAD)}"
+# On pull requests GITHUB_SHA is the merge commit; CI passes the head in PR_HEAD_SHA.
+sha="${PR_HEAD_SHA:-${GITHUB_SHA:-$(git rev-parse HEAD)}}"
 
 if [[ "$ref" == refs/tags/v* ]]; then
     tag="${ref#refs/tags/v}"
