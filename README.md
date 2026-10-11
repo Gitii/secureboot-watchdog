@@ -31,64 +31,98 @@ systemd-boot + GNOME machine with the right tooling installed.
 - `secureboot-monitor.service` runs `/usr/sbin/secureboot-check` as root and
   writes JSON to `/run/secureboot-monitor/status.json`. Driven by a timer
   (boot + hourly), a `/var/lib/dkms` path watcher, and a kernel postinst hook.
-- A per-user `.path` unit watches the status file. On change with `ok:false`
-  it runs `/usr/bin/secureboot-notify`, which sends a GNOME notification with
-  *Fix now* / *Details* / *Dismiss* actions.
+- A per-user `.path` unit watches the status file (and the notifier also
+  runs at login). When the status reports `ok:false` it runs
+  `/usr/bin/secureboot-notify`, which sends a GNOME notification with
+  *Fix now* / *Details* / *Dismiss* actions. A notification whose issue has
+  cleared on a later check is withdrawn.
 - *Fix now* prompts for confirmation, optionally collects a MOK enrollment
   password, then `pkexec`s `/usr/sbin/secureboot-fix --code <CODE>` to apply
   the issue-specific repair.
 
 ## Install
 
-```sh
-sudo apt install ./secureboot-watchdog_0.1_all.deb
-```
+### Debian package
 
-Log out and back in once so the user-side `.path` unit comes up in your
-running session.
-
-## Build from source
-
-The project ships with a [Devbox](https://www.jetify.com/devbox) config that
-pulls in `dpkg`, `debian-devscripts` (`debuild`, `dpkg-parsechangelog`), `jq`,
-`shellcheck`, and `libxml2` (for `xmllint`) from nixpkgs. Two tools aren't in
-nixpkgs and need to come from apt — install them once:
+Every [release](https://github.com/Gitii/secureboot-watchdog/releases) ships
+one `.deb` per supported Ubuntu, built and tested on that Ubuntu by the
+`Build` workflow. Pick the file matching your release
+(`….ubuntu24.04_amd64.deb` or `….ubuntu26.04_amd64.deb`) and install it:
 
 ```sh
-sudo apt install debhelper lintian
+sudo apt install ./secureboot-watchdog_*_amd64.deb
 ```
+
+Log out and back in once so the user-side units come up in your session.
+
+### From source
 
 ```sh
-devbox shell                # one-time: drops you into a shell with all build deps
-devbox run lint             # shellcheck + polkit XML validation
-devbox run build            # debuild -us -uc -b → ../secureboot-watchdog_*.deb
-devbox run lintian          # run lintian on the produced .deb
-devbox run install          # apt install the freshly built .deb
-devbox run clean            # remove build artefacts
+git clone https://github.com/Gitii/secureboot-watchdog.git
+cd secureboot-watchdog
+sudo apt-get build-dep ./   # build dependencies, read from debian/control
+make install                # builds the .deb into dist/ and installs it with apt
 ```
 
-Or use system packages instead of Devbox if you prefer:
-
-```sh
-sudo apt install devscripts lintian
-sudo apt build-dep .        # Build-Depends from debian/control
-debuild -us -uc -b
-sudo apt install ../secureboot-watchdog_*_amd64.deb
-```
-
-To build packages for Ubuntu 24.04 and 26.04 in clean Docker containers,
-from the committed tree and with nothing installed on the host:
-
-```sh
-packaging/build-debs.sh     # both; or: noble | resolute
-sudo apt install ./dist/debs/resolute/secureboot-watchdog_*.deb
-```
-
-## Uninstall
+### Uninstall
 
 ```sh
 sudo apt purge secureboot-watchdog
 ```
+
+## Development
+
+```sh
+make                  # build the UI (cargo build --release)
+make check            # unit tests, version check
+make lint             # shellcheck, polkit XML, cargo fmt + clippy
+make deb              # binary .deb (dpkg-buildpackage -b), collected in dist/
+make check-installed  # smoke test of the installed package
+make clean
+```
+
+`make lint` runs on Ubuntu 26.04 (CI does the same) and additionally needs
+`shellcheck libxml2-utils rustfmt rust-clippy`;
+CI additionally needs `devscripts lintian jq`. On Ubuntu 24.04 the Rust
+toolchain comes from `cargo-1.91`/`rustc-1.91`, which install outside `PATH`;
+the Makefile and `debian/rules` pick them up.
+
+`make check` fails if the version in `ui/Cargo.toml` differs from the top
+entry of `debian/changelog`.
+
+To try the UI without a real status file, run it against a fixture:
+
+```sh
+ui/target/release/secureboot-watchdog-ui --mock-status screen2_multi --mock-fix success
+```
+
+### Releasing
+
+Bump `version` in `ui/Cargo.toml` and add an entry to the top of
+`debian/changelog` (`dch -v X.Y.Z`; it is a native package, so there is no
+`-1` Debian revision), merge, then tag the merge commit:
+
+```sh
+git tag v0.7.0
+git push origin v0.7.0
+```
+
+The `Build` workflow (`.github/workflows/build.yml`) runs on GitHub-hosted
+`ubuntu-24.04` and `ubuntu-26.04` runners. On each it:
+
+1. installs the build dependencies with `apt-get build-dep ./`;
+2. runs `make check`;
+3. stamps the version with `scripts/ci-set-version.sh`;
+4. runs `make deb` and `lintian --fail-on error`;
+5. installs the `.deb` and runs `make check-installed`.
+
+A separate job runs `make lint`. On a `v*` tag, a release job attaches both
+`.deb` files to a GitHub release. Release packages are versioned
+`X.Y.Z~ubuntu24.04` and `X.Y.Z~ubuntu26.04` (GitHub shows the `~` as `.` in
+the asset names), and the script refuses a tag
+that doesn't match `debian/changelog`. Pull requests, pushes to `main` and
+manual runs upload the same `.deb` files as workflow artifacts, versioned
+`X.Y.Z+git<date>.<sha>~ubuntuVER`.
 
 ## License
 
