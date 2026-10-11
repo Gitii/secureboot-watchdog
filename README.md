@@ -47,7 +47,7 @@ systemd-boot + GNOME machine with the right tooling installed.
 Every [release](https://github.com/Gitii/secureboot-watchdog/releases) ships
 one `.deb` per supported Ubuntu, built and tested on that Ubuntu by the
 `Build` workflow. Pick the file matching your release
-(`…~ubuntu24.04_amd64.deb` or `…~ubuntu26.04_amd64.deb`) and install it:
+(`….ubuntu24.04_amd64.deb` or `….ubuntu26.04_amd64.deb`) and install it:
 
 ```sh
 sudo apt install ./secureboot-watchdog_*_amd64.deb
@@ -81,7 +81,8 @@ make check-installed  # smoke test of the installed package
 make clean
 ```
 
-`make lint` additionally needs `shellcheck libxml2-utils rustfmt rust-clippy`;
+`make lint` runs on Ubuntu 26.04 (CI does the same) and additionally needs
+`shellcheck libxml2-utils rustfmt rust-clippy`;
 CI additionally needs `devscripts lintian jq`. On Ubuntu 24.04 the Rust
 toolchain comes from `cargo-1.91`/`rustc-1.91`, which install outside `PATH`;
 the Makefile and `debian/rules` pick them up.
@@ -117,7 +118,8 @@ The `Build` workflow (`.github/workflows/build.yml`) runs on GitHub-hosted
 
 A separate job runs `make lint`. On a `v*` tag, a release job attaches both
 `.deb` files to a GitHub release. Release packages are versioned
-`X.Y.Z~ubuntu24.04` and `X.Y.Z~ubuntu26.04`, and the script refuses a tag
+`X.Y.Z~ubuntu24.04` and `X.Y.Z~ubuntu26.04` (GitHub shows the `~` as `.` in
+the asset names), and the script refuses a tag
 that doesn't match `debian/changelog`. Pull requests, pushes to `main` and
 manual runs upload the same `.deb` files as workflow artifacts, versioned
 `X.Y.Z+git<date>.<sha>~ubuntuVER`.

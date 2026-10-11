@@ -1,10 +1,9 @@
 // Compile Blueprint files to .ui XML, then bundle them (plus style.css) into a
 // single .gresource that the binary embeds via include_bytes!.
 //
-// Requires `blueprint-compiler` and `glib-compile-resources` on PATH. Inside
-// `devbox shell` both come from nixpkgs; on a bare noble box they come from
-// the `blueprint-compiler` and `libglib2.0-bin` apt packages, which are
-// listed in debian/control Build-Depends.
+// Requires `blueprint-compiler` and `glib-compile-resources` on PATH. They
+// come from the `blueprint-compiler` and `libglib2.0-bin` apt packages, which
+// are listed in debian/control Build-Depends.
 
 use std::env;
 use std::path::PathBuf;
