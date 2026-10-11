@@ -2,9 +2,11 @@
 Description=Watch /run/secureboot-monitor/status.json for changes
 Documentation=https://github.com/Gitii/secureboot-watchdog
 
+# PathChanged only: PathExists would re-run the notifier every time it exits,
+# until systemd's trigger limit stops this unit. The status already present
+# at login is picked up by secureboot-notify.service itself.
 [Path]
 PathChanged=/run/secureboot-monitor/status.json
-PathExists=/run/secureboot-monitor/status.json
 Unit=secureboot-notify.service
 
 [Install]

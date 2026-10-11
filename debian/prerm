@@ -4,7 +4,7 @@ set -e
 case "$1" in
     remove|deconfigure|upgrade)
         if command -v systemctl >/dev/null; then
-            systemctl --global disable secureboot-notify.path >/dev/null 2>&1 || true
+            systemctl --global disable secureboot-notify.path secureboot-notify.service >/dev/null 2>&1 || true
         fi
         ;;
     failed-upgrade)

@@ -7,10 +7,12 @@ case "$1" in
         if [ -e /etc/kernel/postinst.d/zzz-secureboot-recheck ]; then
             chmod 0755 /etc/kernel/postinst.d/zzz-secureboot-recheck
         fi
-        # Enable the user .path unit globally so it comes up at login for every user.
+        # Enable the user units globally so they come up at login for every user:
+        # the .path unit watches the status file, the .service reports the
+        # status already present at login.
         # dh_installsystemd does not yet --global enable user units.
         if command -v systemctl >/dev/null; then
-            systemctl --global enable secureboot-notify.path >/dev/null 2>&1 || true
+            systemctl --global enable secureboot-notify.path secureboot-notify.service >/dev/null 2>&1 || true
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)

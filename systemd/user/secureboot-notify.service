@@ -2,7 +2,12 @@
 Description=Notify the user about Secure Boot chain issues
 Documentation=https://github.com/Gitii/secureboot-watchdog
 ConditionPathExists=/run/secureboot-monitor/status.json
+# Notifications need the desktop's notification server.
+After=graphical-session.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/secureboot-notify
+
+[Install]
+WantedBy=graphical-session.target
