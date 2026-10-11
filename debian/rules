@@ -2,20 +2,9 @@
 
 # Ubuntu 24.04's default cargo (1.75) cannot build edition-2024 crates such
 # as clap_lex 1.1, so Build-Depends fall back to the versioned toolchain there,
-# which is installed outside PATH. Added before the devbox block, whose
-# toolchain still takes precedence when present.
+# which is installed outside PATH.
 ifneq ("$(wildcard /usr/lib/rust-1.91/bin/cargo)","")
     export PATH := /usr/lib/rust-1.91/bin:$(PATH)
-endif
-
-# If devbox-managed tools are present in the build tree, expose them to the
-# sub-make / sub-shells that dpkg-buildpackage spawns (these otherwise inherit
-# only the system PATH and miss rustc/cargo/blueprint-compiler).
-DEVBOX_BIN := $(CURDIR)/.devbox/nix/profile/default/bin
-DEVBOX_PC  := $(CURDIR)/.devbox/nix/profile/default/lib/pkgconfig:$(CURDIR)/.devbox/nix/profile/default/share/pkgconfig
-ifneq ("$(wildcard $(DEVBOX_BIN)/cargo)","")
-    export PATH := $(DEVBOX_BIN):$(PATH)
-    export PKG_CONFIG_PATH := $(DEVBOX_PC):$(PKG_CONFIG_PATH)
 endif
 
 # Standard dh sequence, plus a cargo build for the UI binary.
@@ -27,6 +16,6 @@ endif
 override_dh_auto_build:
 	cd ui && cargo build --release --locked
 
-override_dh_auto_clean:
-	-cd ui && cargo clean
-	dh_auto_clean
+# Files are placed by debian/install; the Makefile's install target builds
+# and installs the .deb itself.
+override_dh_auto_install:
