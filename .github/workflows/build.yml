@@ -63,6 +63,8 @@ jobs:
 
       - name: Set package version
         run: scripts/ci-set-version.sh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
       - name: Build .deb
         run: |
