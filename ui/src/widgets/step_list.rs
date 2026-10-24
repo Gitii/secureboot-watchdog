@@ -160,6 +160,13 @@ impl StepList {
 }
 
 fn humanize_step_name(name: &str) -> String {
+    match name {
+        "replace-enrollment" => {
+            return "Replace TPM enrollment (enroll, then wipe old slot)".into()
+        }
+        "cleanup-key" => return "Remove temporary unlock key".into(),
+        _ => {}
+    }
     name.split(&['-', '_'][..])
         .map(|word| {
             let mut c = word.chars();

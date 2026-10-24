@@ -33,7 +33,7 @@ systemd-cryptenroll() {
     echo "cryptenroll $*" >> "$TPM_TEST_TRACE"
     [[ $* == --help ]] || return 99
     [[ ${TPM_TEST_NO_TOOLS:-0} == 0 ]] || return 1
-    echo '--tpm2-pcrs --tpm2-seal-key-handle --tpm2-with-pin --tpm2-public-key --tpm2-pcrlock'
+    echo '--tpm2-device --tpm2-pcrs --tpm2-seal-key-handle --tpm2-with-pin --tpm2-public-key --tpm2-public-key-pcrs --tpm2-signature --tpm2-pcrlock --unlock-key-file --wipe-slot'
 }
 tpm2_readpublic() {
     echo "readpublic $*" >> "$TPM_TEST_TRACE"
@@ -125,14 +125,18 @@ locked=$(jq -c '.[0].message="TPM2 lockout"' <<< "$evidence")
 tpm_preflight "$locked" "$tmp/crypttab" | jq -e '.eligible == false' >/dev/null
 tpm_preflight '[]' "$tmp/crypttab" | jq -e '.eligible == false' >/dev/null
 
-# Integration: status advertises the plan, never repair authorization.
+# Integration: only a supported plan advertises repair authorization.
 bash sbin/secureboot-check --tpm-fixtures "$tmp/journal" "$tmp/crypttab" > "$tmp/status"
-jq -e '.issues[0] | .auto_fixable == false and .tpm_preflight.eligible
+jq -e '.issues[0] | .auto_fixable == true and .tpm_preflight.eligible
     and .tpm_preflight.plan.mapping == "second"' "$tmp/status" >/dev/null
-# Direct privileged entry remains disabled, including supplied/stale constraints.
+# Direct privileged entry refuses missing authoritative host evidence.
+# Test-only source copy isolates the fixed runtime lock and crypttab paths.
+sed -e "s|/run/secureboot-watchdog-tpm.lock|$tmp/repair.lock|g" \
+    -e "s|/etc/crypttab|$tmp/no-crypttab|g" sbin/secureboot-fix > "$tmp/secureboot-fix"
+cp sbin/secureboot-tpm-preflight sbin/secureboot-tpm-replace "$tmp/"
 for plan in "$expected" '{}' 'not-json'; do
-    if bash sbin/secureboot-fix --code TPM_PCR_DRIFT --expected-tpm-plan "$plan" --dry-run < /dev/null > "$tmp/out" 2>&1; then
-        echo 'disabled helper succeeded' >&2; exit 1
+    if bash "$tmp/secureboot-fix" --code TPM_PCR_DRIFT --expected-tpm-plan "$plan" --dry-run < /dev/null > "$tmp/out" 2>&1; then
+        echo 'unvalidated helper succeeded' >&2; exit 1
     fi
 done
 if grep -E 'MUTATION|wipe|dictionarylockout' "$TPM_TEST_TRACE"; then exit 1; fi

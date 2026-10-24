@@ -16,14 +16,15 @@ UI_BIN=${UI_BIN:-/usr/bin/secureboot-watchdog-ui}
 POPUP_UNIT=secureboot-notify-popup.service
 APP_NAME="Secure Boot"
 ICON=security-high
-INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING TPM_PCR_DRIFT"
+INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
 
 current_issue_fixable() {
     local code=$1
-    # TPM remains info-only even if an old status file offered repair.
     if grep -qw "$code" <<<"$INFO_ONLY"; then return 1; fi
     jq -e --arg code "$code" \
-        'any(.issues[]; .code == $code and .auto_fixable == true)' "$STATUS_FILE" >/dev/null 2>&1
+        'any(.issues[]; .code == $code and .auto_fixable == true and
+          (.code != "TPM_PCR_DRIFT" or (.tpm_preflight.eligible == true and
+            (.tpm_preflight.plan | type == "object"))))' "$STATUS_FILE" >/dev/null 2>&1
 }
 
 popup() {
@@ -52,7 +53,9 @@ popup() {
             if [[ $action == fix ]] && ! current_issue_fixable "$code"; then
                 action=details
             fi
-            systemd-run --user --collect --quiet "$UI_BIN" "$action" --code "$code"
+            # Keep the unit alive for its helper even after its UI main process
+            # exits. Default ExitType=main would stop/kill the entire cgroup.
+            systemd-run --user --collect --quiet -p ExitType=cgroup "$UI_BIN" "$action" --code "$code"
             ;;
     esac
 }

@@ -16,7 +16,7 @@ Gtk.Box screen4_root {
   }
 
   Gtk.Label subtitle {
-    label: _("Enter the passphrase you type at boot. It's used to re-seal the TPM2 keyslot and is not stored.");
+    label: _("Enter an existing LUKS passphrase to replace the confirmed TPM enrollment. It is used only for this repair and removed afterward. Enrollment changes must finish once launched.");
     halign: start;
     wrap: true;
     styles ["dim-label"]

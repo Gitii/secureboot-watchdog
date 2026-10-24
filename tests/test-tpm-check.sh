@@ -47,7 +47,7 @@ for mode in normal dry; do
         echo 'TPM helper unexpectedly succeeded' >&2
         exit 1
     fi
-    grep -q 'Automatic TPM repair is disabled' "$tmp/output"
+    grep -q 'Refusing missing, stale or ineligible TPM plan' "$tmp/output"
 done
 if [[ -f $TRACE ]]; then
     if grep -E 'systemd-cryptenroll|tpm2_dictionarylockout|cryptsetup|mktemp' "$TRACE"; then exit 1; fi

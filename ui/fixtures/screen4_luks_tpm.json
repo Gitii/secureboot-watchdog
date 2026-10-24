@@ -7,8 +7,8 @@
       "code": "TPM_PCR_DRIFT",
       "severity": "warning",
       "summary": "Cryptsetup reported a TPM disk-unlock error",
-      "detail": "Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift.\n\nAutomatic TPM repair is disabled. Review the disk's existing TPM enrollment and policy before making changes.",
-      "auto_fixable": false,
+      "detail": "Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift.\n\nReview the target and policy before replacing enrollment. Keep your LUKS passphrase available for the next boot.",
+      "auto_fixable": true,
       "tpm_evidence": [{
         "mapping": "nvme0n1p3_crypt",
         "source": "UUID=22222222-2222-2222-2222-222222222222",
@@ -19,7 +19,7 @@
       }],
       "tpm_preflight": {
         "eligible": true,
-        "reason": "Supported static-PCR plan; automatic repair remains disabled.",
+        "reason": "Supported static-PCR enrollment can be replaced against current PCR values.",
         "plan": {
           "luks_uuid": "22222222-2222-2222-2222-222222222222",
           "mapping": "nvme0n1p3_crypt",

@@ -103,7 +103,7 @@ tpm_preflight() {
         tpm_refuse 'Missing, ambiguous or unsupported TPM enrollment. Only explicit static-PCR persistent-key policies are supported.'; return;
     }
     help=$(systemd-cryptenroll --help 2>/dev/null) || { tpm_refuse 'Enrollment tooling is unavailable.'; return; }
-    for option in --tpm2-pcrs --tpm2-seal-key-handle --tpm2-with-pin --tpm2-public-key --tpm2-pcrlock; do
+    for option in --tpm2-device --tpm2-pcrs --tpm2-seal-key-handle --tpm2-with-pin --tpm2-public-key --tpm2-public-key-pcrs --tpm2-signature --tpm2-pcrlock --unlock-key-file --wipe-slot; do
         [[ $help == *"$option"* ]] || { tpm_refuse 'Installed enrollment tooling cannot reproduce this policy.'; return; }
     done
     srk=$(jq -r '.metadata.tpm2_srk' <<<"$token")
@@ -116,11 +116,11 @@ tpm_preflight() {
     fi
     tmp=$(mktemp -d) || return 1
     if ! tpm2_readpublic -T device:/dev/tpmrm0 -c "0x$handle" -t "$tmp/srk" >/dev/null 2>&1; then
-        rm -f -- "$tmp/srk"; rmdir -- "$tmp"
+        rm -f -- "$tmp/srk" && rmdir -- "$tmp" || return 1
         tpm_refuse 'Cannot verify the persistent TPM sealing key (tpm2_readpublic required).'; return
     fi
     actual=$(base64 -w0 < "$tmp/srk")
-    rm -f -- "$tmp/srk"; rmdir -- "$tmp"
+    rm -f -- "$tmp/srk" && rmdir -- "$tmp" || return 1
     if [[ $srk != "$actual" ]]; then
         tpm_refuse 'The persistent TPM sealing key no longer matches the enrollment.'; return
     fi
@@ -129,7 +129,7 @@ tpm_preflight() {
         {luks_uuid:$uuid, mapping:$mapping, source:$source, crypttab_options:$options,
          token:$token, policy:{pcrs:$token.metadata["tpm2-pcrs"], bank:$token.metadata["tpm2-pcr-bank"],
          seal_key_handle:$handle, pin:false, signed_pcr:false, pcrlock:false}}') || return 1
-    jq -nc --argjson plan "$plan" '{eligible:true, reason:"Supported static-PCR plan; automatic repair remains disabled.", plan:$plan}'
+    jq -nc --argjson plan "$plan" '{eligible:true, reason:"Supported static-PCR enrollment can be replaced against current PCR values.", plan:$plan}'
 }
 
 # Constraints only: current MUST come from authoritative preflight.

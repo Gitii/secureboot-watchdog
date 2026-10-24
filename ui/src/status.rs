@@ -84,7 +84,13 @@ pub struct TpmEvidence {
 
 impl Issue {
     pub fn can_fix(&self) -> bool {
-        self.auto_fixable && !is_info_only(&self.code)
+        self.auto_fixable
+            && !is_info_only(&self.code)
+            && (self.code != "TPM_PCR_DRIFT"
+                || self
+                    .tpm_preflight
+                    .as_ref()
+                    .is_some_and(|p| p.eligible && p.plan.is_some()))
     }
 
     pub fn details_text(&self) -> String {
@@ -165,11 +171,7 @@ pub enum SecretKind {
 /// Codes whose fixer is info-only — the UI shows a details/instructions
 /// screen and no Fix button.
 pub fn is_info_only(code: &str) -> bool {
-    // TPM repairs stay disabled even for a stale status with auto_fixable=true.
-    matches!(
-        code,
-        "SB_DISABLED" | "LOCKDOWN_OFF" | "MOK_PENDING" | "TPM_PCR_DRIFT"
-    )
+    matches!(code, "SB_DISABLED" | "LOCKDOWN_OFF" | "MOK_PENDING")
 }
 
 /// Whether the on-disk MOK directory contains any `.priv` file. If not, a
@@ -264,7 +266,7 @@ mod tests {
         let status: Status =
             serde_json::from_str(include_str!("../fixtures/screen4_luks_tpm.json")).unwrap();
         let issue = &status.issues[0];
-        assert!(!issue.can_fix());
+        assert!(issue.can_fix());
         let evidence = &issue.tpm_evidence[0];
         assert_eq!(evidence.source, "UUID=22222222-2222-2222-2222-222222222222");
         let text = issue.details_text();
@@ -273,7 +275,7 @@ mod tests {
             "sha384",
             "0x81000001",
             "Token: 4",
-            "automatic repair remains disabled",
+            "Supported static-PCR",
         ] {
             assert!(text.contains(value), "missing plan detail: {value}");
         }
@@ -285,6 +287,7 @@ mod tests {
         assert_eq!(plan, &roundtrip);
         let mut stale = issue.clone();
         stale.auto_fixable = true;
+        stale.tpm_preflight = None;
         assert!(!stale.can_fix());
         for value in [
             &evidence.mapping,
@@ -310,7 +313,7 @@ mod tests {
         assert!(is_info_only("LOCKDOWN_OFF"));
         assert!(is_info_only("MOK_PENDING"));
         assert!(!is_info_only("DKMS_UNSIGNED"));
-        assert!(is_info_only("TPM_PCR_DRIFT"));
+        assert!(!is_info_only("TPM_PCR_DRIFT"));
     }
 
     #[test]

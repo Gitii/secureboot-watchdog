@@ -1,0 +1,75 @@
+#!/bin/bash
+# Source-only execution primitive. The caller supplies an authoritative,
+# freshly validated plan, never a device or policy from the UI. Exits the helper.
+tpm_replace() {
+    local plan=$1 dry_run=$2 device pcrs handle pw key='' child='' rc
+    # A disappearing UI must not interrupt enrollment or EXIT cleanup.
+    trap '' PIPE HUP
+    tpm_log() { printf '%s\n' "$*" 2>/dev/null || :; }
+    # shellcheck disable=SC2329 # invoked by the EXIT trap
+    tpm_cleanup() {
+        local result=$?
+        trap - EXIT
+        trap '' TERM INT
+        if [[ -n $child ]]; then
+            kill -TERM "$child" 2>/dev/null || :
+            wait "$child" 2>/dev/null || :
+        fi
+        if [[ -n $key ]] && ! rm -f -- "$key"; then
+            tpm_log 'Temporary unlock-key cleanup failed; repair is not complete.'
+            result=1
+        fi
+        if (( ! dry_run )); then
+            systemctl start --no-block secureboot-monitor.service 2>/dev/null || :
+        fi
+        exit "$result"
+    }
+    trap tpm_cleanup EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    tpm_log '[STEPS] replace-enrollment|cleanup-key'
+    if (( ! dry_run )); then
+        if ! IFS= read -r pw || [[ -z $pw ]]; then
+            tpm_log 'No LUKS passphrase received.'
+            exit 1
+        fi
+        umask 077
+        key=$(mktemp /run/secureboot-tpm-key.XXXXXXXX) || exit 1
+        printf '%s' "$pw" > "$key" || exit 1
+        unset pw
+        # Reading stdin may have waited indefinitely. Under the still-held
+        # repair lock, reject any changed evidence, target, token or policy.
+        # Only this FINAL authoritative plan supplies enrollment arguments.
+        plan=$(validated_tpm_plan) || exit 1
+    fi
+    device=$(readlink -e -- "/dev/disk/by-uuid/$(jq -r .luks_uuid <<<"$plan")") || exit 1
+    pcrs=$(jq -r '.policy as $p | $p.pcrs | map(tostring + ":" + $p.bank) | join("+")' <<<"$plan") || exit 1
+    handle=$(jq -r .policy.seal_key_handle <<<"$plan") || exit 1
+    if (( dry_run )); then
+        tpm_log "[dry-run] would replace TPM enrollment on $device (PCRs $pcrs, sealing key $handle); no changes made."
+        exit 0
+    fi
+    tpm_log '[STEP] replace-enrollment'
+    # Both supported systemd versions enroll first, wipe only on success,
+    # and exclude the new slot. Explicit options prevent discovered policies.
+    # Do not use run(): neither secrets nor enrollment output belong in logs.
+    systemd-cryptenroll --tpm2-device=/dev/tpmrm0 \
+        "--tpm2-pcrs=$pcrs" "--tpm2-seal-key-handle=$handle" \
+        --tpm2-with-pin=no --tpm2-public-key= --tpm2-public-key-pcrs= \
+        --tpm2-signature= --tpm2-pcrlock= \
+        "--unlock-key-file=$key" --wipe-slot=tpm2 "$device" \
+        </dev/null >/dev/null 2>&1 &
+    child=$!
+    wait "$child"
+    rc=$?
+    child=''
+    if (( rc != 0 )); then
+        tpm_log "TPM enrollment replacement failed (exit $rc). Review the disk enrollment before retrying."
+        exit "$rc"
+    fi
+    tpm_log '[STEP] cleanup-key'
+    rm -f -- "$key" || exit 1
+    key=''
+    tpm_log 'TPM enrollment replaced. A subsequent boot has not been verified.'
+    exit 0
+}

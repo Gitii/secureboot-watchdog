@@ -8,6 +8,7 @@ Build-Depends: debhelper-compat (= 13),
  libgtk-4-dev,
  libadwaita-1-dev,
  blueprint-compiler,
+ python3,
  libglib2.0-bin,
  pkg-config
 Standards-Version: 4.6.2

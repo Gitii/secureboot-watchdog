@@ -36,47 +36,31 @@ pub fn mock_fix_script(mode: &str) -> &'static str {
 }
 
 const MOCK_SUCCESS: &str = r#"
-echo "[STEPS] clear-lockout|wipe-old-slot|seal-new-slot|finalize"
-echo "[STEP] clear-lockout"
-echo "+ tpm2_dictionarylockout --clear-lockout"
+echo "[STEPS] replace-enrollment|cleanup-key"
+echo "[STEP] replace-enrollment"
+echo "Replacing TPM enrollment (old enrollment retained until new enrollment succeeds)"
 sleep 0.4
-echo "[STEP] wipe-old-slot"
-echo "+ systemd-cryptenroll --wipe-slot=tpm2 /dev/nvme0n1p3"
+echo "[STEP] cleanup-key"
 sleep 0.4
-echo "[STEP] seal-new-slot"
-echo "+ systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/nvme0n1p3"
-sleep 0.4
-echo "[STEP] finalize"
-echo "+ systemctl start --no-block secureboot-monitor.service"
+echo "TPM enrollment replaced. A subsequent boot has not been verified."
 exit 0
 "#;
 
 const MOCK_SLOW: &str = r#"
-echo "[STEPS] clear-lockout|wipe-old-slot|seal-new-slot|finalize"
-echo "[STEP] clear-lockout"
-echo "+ tpm2_dictionarylockout --clear-lockout"
+echo "[STEPS] replace-enrollment|cleanup-key"
+echo "[STEP] replace-enrollment"
+echo "Replacing TPM enrollment (old enrollment retained until new enrollment succeeds)"
 sleep 2
-echo "[STEP] wipe-old-slot"
-echo "+ systemd-cryptenroll --wipe-slot=tpm2 /dev/nvme0n1p3"
+echo "[STEP] cleanup-key"
 sleep 2
-echo "[STEP] seal-new-slot"
-echo "+ systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/nvme0n1p3"
-sleep 2
-echo "[STEP] finalize"
-echo "+ systemctl start --no-block secureboot-monitor.service"
+echo "TPM enrollment replaced. A subsequent boot has not been verified."
 exit 0
 "#;
 
 const MOCK_FAILURE: &str = r#"
-echo "[STEPS] clear-lockout|wipe-old-slot|seal-new-slot|finalize"
-echo "[STEP] clear-lockout"
-echo "+ tpm2_dictionarylockout --clear-lockout"
+echo "[STEPS] replace-enrollment|cleanup-key"
+echo "[STEP] replace-enrollment"
 sleep 0.4
-echo "[STEP] wipe-old-slot"
-echo "+ systemd-cryptenroll --wipe-slot=tpm2 /dev/nvme0n1p3"
-sleep 0.4
-echo "[STEP] seal-new-slot"
-echo "+ systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7+11 /dev/nvme0n1p3"
-echo "Failed to setup TPM2 keyslot: No such file or directory"
+echo "TPM enrollment replacement failed. Review disk enrollment before retrying."
 exit 1
 "#;
