@@ -27,6 +27,41 @@ pub struct Issue {
     pub summary: String,
     pub detail: String,
     pub auto_fixable: bool,
+    /// Journal provenance, retained separately from human-readable guidance.
+    #[serde(default)]
+    pub tpm_evidence: Vec<TpmEvidence>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TpmEvidence {
+    pub mapping: String,
+    pub source: String,
+    pub unit: String,
+    pub message: String,
+    pub comm: String,
+    pub exe: String,
+}
+
+impl Issue {
+    pub fn can_fix(&self) -> bool {
+        self.auto_fixable && !is_info_only(&self.code)
+    }
+
+    pub fn details_text(&self) -> String {
+        let mut text = self.detail.clone();
+        for evidence in &self.tpm_evidence {
+            text.push_str(&format!(
+                "\n\nJournal provenance: {} ({})\n{}\n{} [{}]\n{}",
+                evidence.mapping,
+                evidence.source,
+                evidence.unit,
+                evidence.comm,
+                evidence.exe,
+                evidence.message
+            ));
+        }
+        text
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +111,11 @@ pub enum SecretKind {
 /// Codes whose fixer is info-only — the UI shows a details/instructions
 /// screen and no Fix button.
 pub fn is_info_only(code: &str) -> bool {
-    matches!(code, "SB_DISABLED" | "LOCKDOWN_OFF" | "MOK_PENDING")
+    // TPM repairs stay disabled even for a stale status with auto_fixable=true.
+    matches!(
+        code,
+        "SB_DISABLED" | "LOCKDOWN_OFF" | "MOK_PENDING" | "TPM_PCR_DRIFT"
+    )
 }
 
 /// Whether the on-disk MOK directory contains any `.priv` file. If not, a
@@ -167,12 +206,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tpm_fixture_retains_and_displays_provenance() {
+        let status: Status =
+            serde_json::from_str(include_str!("../fixtures/screen4_luks_tpm.json")).unwrap();
+        let issue = &status.issues[0];
+        assert!(!issue.can_fix());
+        let evidence = &issue.tpm_evidence[0];
+        assert_eq!(evidence.source, "UUID=example-luks-uuid");
+        let text = issue.details_text();
+        for value in [
+            &evidence.mapping,
+            &evidence.source,
+            &evidence.unit,
+            &evidence.message,
+            &evidence.comm,
+            &evidence.exe,
+        ] {
+            assert!(text.contains(value));
+        }
+        let other: Status =
+            serde_json::from_str(include_str!("../fixtures/screen2_multi.json")).unwrap();
+        assert!(other
+            .issues
+            .iter()
+            .all(|issue| issue.tpm_evidence.is_empty()));
+    }
+
+    #[test]
     fn info_only_classification() {
         assert!(is_info_only("SB_DISABLED"));
         assert!(is_info_only("LOCKDOWN_OFF"));
         assert!(is_info_only("MOK_PENDING"));
         assert!(!is_info_only("DKMS_UNSIGNED"));
-        assert!(!is_info_only("TPM_PCR_DRIFT"));
+        assert!(is_info_only("TPM_PCR_DRIFT"));
     }
 
     #[test]

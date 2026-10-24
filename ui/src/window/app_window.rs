@@ -21,6 +21,16 @@ pub enum InitialRoute {
     Fix(Issue),
 }
 
+impl InitialRoute {
+    pub fn for_fix(status: &Status, code: &str) -> Self {
+        match status.issues.iter().find(|issue| issue.code == code) {
+            Some(issue) if issue.can_fix() => Self::Fix(issue.clone()),
+            Some(issue) => Self::Details(issue.clone()),
+            None => Self::Overview,
+        }
+    }
+}
+
 pub struct SecurebootWindow;
 
 impl SecurebootWindow {
@@ -54,6 +64,11 @@ impl SecurebootWindow {
         });
         nav.add(&overview_page);
 
+        // Defend this boundary too, even if another caller constructs Fix.
+        let route = match route {
+            InitialRoute::Fix(issue) if !issue.can_fix() => InitialRoute::Details(issue),
+            other => other,
+        };
         // Initial route.
         match route {
             InitialRoute::Overview => {}
@@ -82,7 +97,7 @@ fn push_for_code(app: &adw::Application, nav: &adw::NavigationView, status: &Sta
     let Some(issue) = status.issues.iter().find(|i| i.code == code).cloned() else {
         return;
     };
-    if issue.auto_fixable && !crate::status::is_info_only(&issue.code) {
+    if issue.can_fix() {
         let page = fix_flow::build_fix_flow_page(app, issue, nav);
         nav.push(&page);
     } else {
@@ -93,5 +108,40 @@ fn push_for_code(app: &adw::Application, nav: &adw::NavigationView, status: &Sta
             nav_clone.push(&p);
         });
         nav.push(&page);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_fix_routes_without_starting_secret_or_repair_flow() {
+        let mut status: Status =
+            serde_json::from_str(include_str!("../../fixtures/screen4_luks_tpm.json")).unwrap();
+        assert!(matches!(
+            InitialRoute::for_fix(&status, "TPM_PCR_DRIFT"),
+            InitialRoute::Details(_)
+        ));
+        // Old status files must not bypass the intermediate TPM repair gate.
+        status.issues[0].auto_fixable = true;
+        assert!(matches!(
+            InitialRoute::for_fix(&status, "TPM_PCR_DRIFT"),
+            InitialRoute::Details(_)
+        ));
+        status.issues[0].code = "DKMS_UNSIGNED".into();
+        assert!(matches!(
+            InitialRoute::for_fix(&status, "DKMS_UNSIGNED"),
+            InitialRoute::Fix(_)
+        ));
+        status.issues[0].auto_fixable = false;
+        assert!(matches!(
+            InitialRoute::for_fix(&status, "DKMS_UNSIGNED"),
+            InitialRoute::Details(_)
+        ));
+        assert!(matches!(
+            InitialRoute::for_fix(&status, "TPM_PCR_DRIFT"),
+            InitialRoute::Overview
+        ));
     }
 }

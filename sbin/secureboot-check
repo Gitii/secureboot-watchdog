@@ -7,9 +7,19 @@ shopt -s nullglob
 KERNEL=$(uname -r)
 ISSUES_JSON=()
 JOURNAL_CMD=${JOURNAL_CMD:-"journalctl -kb --no-pager -o cat"}
-# Userspace journal (no -k) — for systemd-cryptsetup/TPM messages, which the
-# kernel-only JOURNAL_CMD above silently filters out.
-SYSTEM_JOURNAL_CMD=${SYSTEM_JOURNAL_CMD:-"journalctl -b --no-pager -o cat"}
+# Explicit, read-only fixture mode checks only TPM evidence. Production never
+# selects journal/crypttab input from the environment.
+TPM_FIXTURES=0
+CRYPTTAB=/etc/crypttab
+if (( $# )); then
+    [[ $# == 3 && $1 == --tpm-fixtures ]] || {
+        echo 'usage: secureboot-check [--tpm-fixtures JOURNAL_JSONL CRYPTTAB]' >&2
+        exit 2
+    }
+    TPM_FIXTURES=1
+    TPM_JOURNAL=$2
+    CRYPTTAB=$3
+fi
 MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
 EFI_ROOTS=(/boot/efi/EFI/systemd /boot/efi/EFI/BOOT /boot/efi/EFI/Linux)
 
@@ -199,28 +209,41 @@ check_sbat_revoked() {
 }
 
 check_tpm_pcr_drift() {
-    grep -qE 'tpm2-device=' /etc/crypttab 2>/dev/null || return 0
-    local hits
-    # systemd-cryptsetup logs "Failed to unseal secret using TPM2: <reason>"
-    # when the TPM refuses to release the LUKS keyslot. The two common causes
-    # are PCR drift (sealed PCR values no longer match — usually PCR 7 after
-    # a shim/kernel/MOK change) and TPM dictionary-attack lockout (repeated
-    # failed unseals push the TPM into a cooldown). Both surface here.
-    hits=$(eval "$SYSTEM_JOURNAL_CMD" 2>/dev/null \
-        | grep -iE 'Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout' \
-        | tail -3) || true
-    [[ -z $hits ]] && return 0
-
-    local lockout_hint=""
-    if grep -qiE 'lockout|operation not permitted' <<<"$hits"; then
-        lockout_hint=$'\n\nThe TPM may also be in dictionary-attack lockout from repeated failed unseals — clear it first:\n  sudo tpm2_dictionarylockout --clear-lockout'
+    [[ -r $CRYPTTAB ]] || return 0
+    local journal name source _key options rest unit hits evidence='[]' detail lockout=false
+    if (( TPM_FIXTURES )); then
+        journal=$(cat -- "$TPM_JOURNAL") || return 1
+    else
+        journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 0
     fi
-
-    add_issue TPM_PCR_DRIFT warning \
-        "TPM2 LUKS unlock failed at boot" \
-        "systemd-cryptsetup could not unseal the LUKS key from the TPM, so you had to type your passphrase. Most common cause: a sealed PCR value (usually PCR 7 — Secure Boot policy) changed since enrollment (shim/kernel update, MOK enrolled, firmware change). Recent journal lines:"$'\n'"$hits"$'\n\n'"Click Fix to re-seal the TPM2 keyslot against the current PCR values. You will be asked for your LUKS passphrase.${lockout_hint}" true
+    while read -r name source _key options rest || [[ -n $name ]]; do
+        [[ -n $name && $name != \#* && -n $source ]] || continue
+        [[ ,$options, == *,tpm2-device=*,* ]] || continue
+        # crypttab uses octal escapes; systemd's own escaping handles hyphens,
+        # slashes and other characters in the decoded mapping name.
+        printf -v name '%b' "$name"
+        unit=$(systemd-escape --template=systemd-cryptsetup@.service -- "$name") || continue
+        hits=$(jq -sc --arg unit "$unit" --arg mapping "$name" --arg source "$source" '
+            [.[] | select(._SYSTEMD_UNIT == $unit)
+             | select(.MESSAGE | type == "string")
+             | select(.MESSAGE | test("Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout"; "i"))
+             | {mapping:$mapping, source:$source, unit:._SYSTEMD_UNIT,
+                message:.MESSAGE, comm:(._COMM // ""), exe:(._EXE // "")}]
+        ' <<<"$journal") || continue
+        evidence=$(jq -nc --argjson old "$evidence" --argjson new "$hits" '$old + $new')
+    done < "$CRYPTTAB"
+    [[ $evidence != '[]' ]] || return 0
+    lockout=$(jq 'any(.[]; .message | test("lockout|TPM_RC_LOCKOUT|0x0*921\\b"; "i"))' <<<"$evidence")
+    detail="Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift."
+    detail+=$'\n\n'"Automatic TPM repair is disabled. Review the disk's existing TPM enrollment and policy before making changes."
+    if [[ $lockout == true ]]; then
+        detail+=$'\n\n'"Explicit TPM lockout was reported. Consult your TPM administrator or platform documentation for manual dictionary-attack lockout recovery. Re-enrollment is not a lockout cure."
+    fi
+    ISSUES_JSON+=("$(jq -nc --arg detail "$detail" --argjson evidence "$evidence" \
+        '{code:"TPM_PCR_DRIFT", severity:"warning", summary:"Cryptsetup reported a TPM disk-unlock error", detail:$detail, auto_fixable:false, tpm_evidence:$evidence}')")
 }
 
+if (( ! TPM_FIXTURES )); then
 check_sb_state
 check_lockdown
 check_cmdline_lockdown
@@ -232,6 +255,7 @@ check_efi_binaries
 check_mok_enrollment
 check_mok_pending
 check_sbat_revoked
+fi
 check_tpm_pcr_drift
 
 if (( ${#ISSUES_JSON[@]} > 0 )); then

@@ -1,0 +1,5 @@
+{"_SYSTEMD_UNIT":"systemd-cryptsetup@nvme0n1p3_crypt.service","_COMM":"systemd-cryptse","_EXE":"/usr/lib/systemd/systemd-cryptsetup","MESSAGE":"Failed to unseal secret using TPM2: Invalid argument"}
+{"_SYSTEMD_UNIT":"systemd-cryptsetup@nvme0n1p3_crypt.service","MESSAGE":"Failed to unseal secret using TPM2: Operation not permitted"}
+{"_SYSTEMD_UNIT":"systemd-cryptsetup@nvme0n1p3_crypt.service","MESSAGE":"Finished Cryptography Setup for nvme0n1p3_crypt."}
+{"_SYSTEMD_UNIT":"systemd-cryptsetup@data\\x2ddisk.service","MESSAGE":"TPM2 PCR validation failed"}
+{"_SYSTEMD_UNIT":"systemd-cryptsetup@space\\x20disk.service","MESSAGE":"PCR policy did not match"}

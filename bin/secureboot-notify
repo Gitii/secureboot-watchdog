@@ -16,7 +16,15 @@ UI_BIN=${UI_BIN:-/usr/bin/secureboot-watchdog-ui}
 POPUP_UNIT=secureboot-notify-popup.service
 APP_NAME="Secure Boot"
 ICON=security-high
-INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING"
+INFO_ONLY="SB_DISABLED LOCKDOWN_OFF MOK_PENDING TPM_PCR_DRIFT"
+
+current_issue_fixable() {
+    local code=$1
+    # TPM remains info-only even if an old status file offered repair.
+    if grep -qw "$code" <<<"$INFO_ONLY"; then return 1; fi
+    jq -e --arg code "$code" \
+        'any(.issues[]; .code == $code and .auto_fixable == true)' "$STATUS_FILE" >/dev/null 2>&1
+}
 
 popup() {
     local code=$1 body=$2 actions action interrupted=0
@@ -24,10 +32,10 @@ popup() {
     # records its own state, or by the session ending. Forget the state so
     # the next login shows the issue again.
     trap 'interrupted=1' INT
-    if grep -qw "$code" <<<"$INFO_ONLY"; then
-        actions=(-A "details=Details" -A "dismiss=Dismiss")
-    else
+    if current_issue_fixable "$code"; then
         actions=(-A "fix=Fix now" -A "details=Details" -A "dismiss=Dismiss")
+    else
+        actions=(-A "details=Details" -A "dismiss=Dismiss")
     fi
 
     action=$(notify-send -w -u critical -a "$APP_NAME" -i "$ICON" \
@@ -40,6 +48,10 @@ popup() {
     # unit's cgroup once this script exits.
     case $action in
         fix|details)
+            # Recheck on click: notification actions may be stale.
+            if [[ $action == fix ]] && ! current_issue_fixable "$code"; then
+                action=details
+            fi
             systemd-run --user --collect --quiet "$UI_BIN" "$action" --code "$code"
             ;;
     esac
@@ -54,7 +66,7 @@ fi
 command -v jq >/dev/null || exit 0
 
 ok=$(jq -r '.ok' "$STATUS_FILE" 2>/dev/null || echo "true")
-codes=$(jq -r '.issues[].code' "$STATUS_FILE" 2>/dev/null | sort)
+codes=$(jq -c '[.issues[] | {code, auto_fixable}] | sort_by(.code)' "$STATUS_FILE" 2>/dev/null)
 hash=$(printf '%s\n%s' "$ok" "$codes" | sha256sum | cut -d' ' -f1)
 last=$(cat "$STATE_FILE" 2>/dev/null || true)
 
