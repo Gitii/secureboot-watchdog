@@ -3,6 +3,8 @@
 # Runs as root (system service). Emits report to stdout.
 set -uo pipefail
 shopt -s nullglob
+# shellcheck source=sbin/secureboot-tpm-preflight
+source "$(dirname -- "${BASH_SOURCE[0]}")/secureboot-tpm-preflight"
 
 KERNEL=$(uname -r)
 ISSUES_JSON=()
@@ -210,28 +212,13 @@ check_sbat_revoked() {
 
 check_tpm_pcr_drift() {
     [[ -r $CRYPTTAB ]] || return 0
-    local journal name source _key options rest unit hits evidence='[]' detail lockout=false
+    local journal evidence detail lockout=false preflight
     if (( TPM_FIXTURES )); then
         journal=$(cat -- "$TPM_JOURNAL") || return 1
     else
         journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 0
     fi
-    while read -r name source _key options rest || [[ -n $name ]]; do
-        [[ -n $name && $name != \#* && -n $source ]] || continue
-        [[ ,$options, == *,tpm2-device=*,* ]] || continue
-        # crypttab uses octal escapes; systemd's own escaping handles hyphens,
-        # slashes and other characters in the decoded mapping name.
-        printf -v name '%b' "$name"
-        unit=$(systemd-escape --template=systemd-cryptsetup@.service -- "$name") || continue
-        hits=$(jq -sc --arg unit "$unit" --arg mapping "$name" --arg source "$source" '
-            [.[] | select(._SYSTEMD_UNIT == $unit)
-             | select(.MESSAGE | type == "string")
-             | select(.MESSAGE | test("Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout"; "i"))
-             | {mapping:$mapping, source:$source, unit:._SYSTEMD_UNIT,
-                message:.MESSAGE, comm:(._COMM // ""), exe:(._EXE // "")}]
-        ' <<<"$journal") || continue
-        evidence=$(jq -nc --argjson old "$evidence" --argjson new "$hits" '$old + $new')
-    done < "$CRYPTTAB"
+    evidence=$(tpm_evidence "$journal" "$CRYPTTAB") || return 1
     [[ $evidence != '[]' ]] || return 0
     lockout=$(jq 'any(.[]; .message | test("lockout|TPM_RC_LOCKOUT|0x0*921\\b"; "i"))' <<<"$evidence")
     detail="Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift."
@@ -239,8 +226,9 @@ check_tpm_pcr_drift() {
     if [[ $lockout == true ]]; then
         detail+=$'\n\n'"Explicit TPM lockout was reported. Consult your TPM administrator or platform documentation for manual dictionary-attack lockout recovery. Re-enrollment is not a lockout cure."
     fi
-    ISSUES_JSON+=("$(jq -nc --arg detail "$detail" --argjson evidence "$evidence" \
-        '{code:"TPM_PCR_DRIFT", severity:"warning", summary:"Cryptsetup reported a TPM disk-unlock error", detail:$detail, auto_fixable:false, tpm_evidence:$evidence}')")
+    preflight=$(tpm_preflight "$evidence" "$CRYPTTAB") || preflight=$(tpm_refuse 'Cannot validate the repair plan.')
+    ISSUES_JSON+=("$(jq -nc --arg detail "$detail" --argjson evidence "$evidence" --argjson preflight "$preflight" \
+        '{code:"TPM_PCR_DRIFT", severity:"warning", summary:"Cryptsetup reported a TPM disk-unlock error", detail:$detail, auto_fixable:false, tpm_evidence:$evidence, tpm_preflight:$preflight}')")
 }
 
 if (( ! TPM_FIXTURES )); then

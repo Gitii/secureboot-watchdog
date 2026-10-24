@@ -9,6 +9,7 @@
 //!
 //! Cancel is a SIGTERM on the returned `Subprocess` handle.
 
+use crate::status::TpmPlan;
 use anyhow::Result;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::AsyncBufReadExt;
@@ -33,7 +34,10 @@ pub enum FixEvent {
 /// How the fix subprocess should be launched.
 pub enum FixMode<'a> {
     /// Real: spawn `pkexec /usr/sbin/secureboot-fix --code CODE`.
-    Pkexec { code: &'a str },
+    Pkexec {
+        code: &'a str,
+        expected_tpm_plan: Option<&'a TpmPlan>,
+    },
     /// Mock: spawn `sh -c <embedded canned-output script>`.
     Mock { script: &'a str },
 }
@@ -43,17 +47,26 @@ pub struct FixHandle {
     pub events: UnboundedReceiver<FixEvent>,
 }
 
+fn pkexec_argv(code: &str, plan: Option<&TpmPlan>) -> Result<Vec<String>> {
+    let mut argv = vec![
+        "pkexec".into(),
+        "/usr/sbin/secureboot-fix".into(),
+        "--code".into(),
+        code.into(),
+    ];
+    if code == "TPM_PCR_DRIFT" {
+        let plan = plan.ok_or_else(|| anyhow::anyhow!("missing confirmed TPM plan"))?;
+        argv.extend(["--expected-tpm-plan".into(), serde_json::to_string(plan)?]);
+    }
+    Ok(argv)
+}
+
 pub fn spawn(mode: FixMode<'_>, password: Option<Zeroizing<Vec<u8>>>) -> Result<FixHandle> {
     let (argv, env_passthrough): (Vec<String>, bool) = match mode {
-        FixMode::Pkexec { code } => (
-            vec![
-                "pkexec".into(),
-                "/usr/sbin/secureboot-fix".into(),
-                "--code".into(),
-                code.into(),
-            ],
-            false,
-        ),
+        FixMode::Pkexec {
+            code,
+            expected_tpm_plan,
+        } => (pkexec_argv(code, expected_tpm_plan)?, false),
         FixMode::Mock { script } => (vec!["sh".into(), "-c".into(), script.into()], true),
     };
     let _ = env_passthrough;
@@ -160,6 +173,35 @@ fn parse_line(line: &str) -> FixEvent {
 mod tests {
     use super::*;
     use futures::{future, StreamExt};
+
+    #[test]
+    fn tpm_confirmation_constraints_are_one_json_argument() {
+        let status: crate::status::Status =
+            serde_json::from_str(include_str!("../fixtures/screen4_luks_tpm.json")).unwrap();
+        let plan = status.issues[0]
+            .tpm_preflight
+            .as_ref()
+            .unwrap()
+            .plan
+            .as_ref()
+            .unwrap();
+        let argv = pkexec_argv("TPM_PCR_DRIFT", Some(plan)).unwrap();
+        assert_eq!(
+            &argv[..5],
+            &[
+                "pkexec",
+                "/usr/sbin/secureboot-fix",
+                "--code",
+                "TPM_PCR_DRIFT",
+                "--expected-tpm-plan"
+            ]
+        );
+        assert_eq!(argv.len(), 6);
+        let sent: TpmPlan = serde_json::from_str(&argv[5]).unwrap();
+        assert_eq!(&sent, plan);
+        assert!(pkexec_argv("TPM_PCR_DRIFT", None).is_err());
+        assert_eq!(pkexec_argv("DKMS_UNSIGNED", None).unwrap().len(), 4);
+    }
 
     #[test]
     fn real_subprocess_completion_events() {

@@ -39,6 +39,35 @@ stale notification actions. Review the affected disk's enrollment and existing
 policy manually. Only explicit lockout evidence calls for manual TPM lockout
 recovery guidance; generic argument or permission errors do not prove lockout.
 
+The shared read-only preflight adds `tpm_preflight` with eligibility, a reason,
+and (when supported) a structured plan shown in Details. Eligibility is not
+repair authorization: no TPM password prompt or repair launch is enabled yet.
+Only one affected mapping is allowed; other unrelated TPM disks are fine.
+Preflight resolves the LUKS UUID and requires one TPM token and one existing
+keyslot, explicit nonempty static PCRs and bank, no PIN/signed-PCR/PCRlock,
+and a persistent sealing key. Unknown token fields, legacy primary-key
+algorithms, ambiguous tokens, missing metadata, crypttab key files and policy
+overrides all require manual review. The narrow crypttab option allowlist is
+`luks`, `discard`, `nofail`, `x-initrd.attach`, `initramfs`, and `tpm2-device=auto`.
+
+The persistent key is checked read-only using `tpm2_readpublic`: its entire
+serialized identity must match `tpm2_srk`, preserving its algorithm, name and
+attributes. If that tool or the required cryptenroll options are unavailable,
+preflight refuses eligibility. This follows systemd 255's
+[`tpm2_make_luks2_json` and serialization](https://github.com/systemd/systemd/blob/v255/src/shared/tpm2-util.c),
+and tpm2-tools' [`--serialized-handle`](https://github.com/tpm2-software/tpm2-tools/blob/5.7/tools/tpm2_readpublic.c).
+Test serialization is synthetic and never accesses a TPM.
+
+The prepared confirmation contract passes the plain JSON plan as
+`--expected-tpm-plan` to the privileged helper. It includes UUID, mapping,
+crypttab options, token ID and complete supported token metadata, plus explicit
+PCR selection/bank and sealing-key handle. Root independently reads current-boot
+journal evidence, `/etc/crypttab` and current LUKS/TPM metadata, then compares
+every constraint; a different eligible target or changed token/policy is not a
+substitute for the confirmed plan. There is no first-disk fallback, `TPM2_PCRS`
+override or implicit 7+11 policy. Even a matching plan is refused until safe
+replacement execution is implemented.
+
 ## How it works
 
 - `secureboot-monitor.service` runs `/usr/sbin/secureboot-check` as root and

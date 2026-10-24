@@ -1,0 +1,16 @@
+{
+  "keyslots": {"2": {"type": "luks2"}},
+  "tokens": {
+    "4": {
+      "type": "systemd-tpm2",
+      "keyslots": ["2"],
+      "tpm2-blob": "c2VhbGVkLW9iamVjdA==",
+      "tpm2-pcrs": [12, 4],
+      "tpm2-pcr-bank": "sha384",
+      "tpm2-policy-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tpm2-pin": false,
+      "tpm2_pcrlock": false,
+      "tpm2_srk": "gQAAAQBtZXRhZGF0YS1vbmx5LXRlc3Qta2V5"
+    }
+  }
+}
