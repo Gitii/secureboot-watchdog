@@ -1,3 +1,16 @@
+secureboot-watchdog (0.7.1) unstable; urgency=medium
+
+  * Attribute TPM unlock errors to configured cryptsetup services, avoiding
+    false LUKS alerts from unrelated service credentials.
+  * Preserve existing TPM enrollment policies, validate the confirmed disk
+    and policy immediately before repair, and serialize repair attempts.
+  * Replace TPM enrollment only after successful enrollment of its replacement;
+    keep lockout recovery manual and protect repair cleanup on interruption.
+  * Honor repair eligibility in notifications and direct app routes, and
+    correctly report subprocess failures and end-of-output handling.
+
+ -- Gitii <gitii@users.noreply.github.com>  Sat, 24 Oct 2026 11:08:05 +0000
+
 secureboot-watchdog (0.7.0) unstable; urgency=medium
 
   * Release packaging: the Build workflow builds, lints and tests one .deb
