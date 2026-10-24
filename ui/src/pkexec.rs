@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::AsyncBufReadExt;
 use gio::prelude::*;
 use glib::MainContext;
 use zeroize::Zeroizing;
@@ -23,9 +24,9 @@ pub enum FixEvent {
     Step(String),
     /// Log line (`+ cmd`, plain output, or stderr).
     LogLine(String),
-    /// Subprocess exited with this status code.
+    /// Normal exit code, or the negative signal number for signal termination.
     Done(i32),
-    /// Spawn or IO error before exit.
+    /// Spawn, IO, or wait error.
     SpawnError(String),
 }
 
@@ -100,13 +101,14 @@ pub fn spawn(mode: FixMode<'_>, password: Option<Zeroizing<Vec<u8>>>) -> Result<
         let Some(stdout) = proc_for_reader.stdout_pipe() else {
             return;
         };
-        let data_in = gio::DataInputStream::new(&stdout);
+        // Read bytes so EOF is an explicit zero-length read, without the
+        // nullable EOF buffer in GIO's read_line binding. Keep lossy UTF-8 logs.
+        let mut data_in = stdout.into_async_buf_read(4096);
         loop {
-            match data_in.read_line_future(glib::Priority::DEFAULT).await {
-                Ok(bytes) => {
-                    if bytes.is_empty() {
-                        break;
-                    }
+            let mut bytes = Vec::new();
+            match data_in.read_until(b'\n', &mut bytes).await {
+                Ok(0) => break,
+                Ok(_) => {
                     let line = String::from_utf8_lossy(&bytes).into_owned();
                     let event = parse_line(&line);
                     if tx_reader.unbounded_send(event).is_err() {
@@ -122,33 +124,18 @@ pub fn spawn(mode: FixMode<'_>, password: Option<Zeroizing<Vec<u8>>>) -> Result<
         }
     });
 
-    // Waiter: emit Done with exit code.
+    // GIO already decodes the wait status. Only a confirmed normal exit 0
+    // may report success; negative signal numbers keep termination distinct.
     MainContext::default().spawn_local(async move {
-        match proc_for_wait.wait_check_future().await {
+        let event = match proc_for_wait.wait_future().await {
+            Err(e) => FixEvent::SpawnError(format!("waiting for subprocess: {e}")),
+            Ok(()) if proc_for_wait.has_exited() => FixEvent::Done(proc_for_wait.exit_status()),
+            Ok(()) if proc_for_wait.has_signaled() => FixEvent::Done(-proc_for_wait.term_sig()),
             Ok(()) => {
-                let _ = tx_wait.unbounded_send(FixEvent::Done(0));
+                FixEvent::SpawnError("subprocess ended without an exit code or signal".into())
             }
-            Err(e) => {
-                // wait_check fails on any non-zero. Use wait() + exit_status() for
-                // the actual code; if signal-killed, code is wait_status & 0xff.
-                let _ = proc_for_wait.wait_future().await;
-                let rc = if let Some(status) = proc_for_wait.exit_status().into() {
-                    let _ = status;
-                    // exit_status is GLib's wait-status int; pull out the high byte.
-                    let raw = proc_for_wait.exit_status();
-                    if raw == 0 {
-                        let _ = e;
-                        -1
-                    } else {
-                        // POSIX: high 8 bits are exit code when normal exit.
-                        (raw >> 8) & 0xff
-                    }
-                } else {
-                    -1
-                };
-                let _ = tx_wait.unbounded_send(FixEvent::Done(rc));
-            }
-        }
+        };
+        let _ = tx_wait.unbounded_send(event);
     });
 
     Ok(FixHandle {
@@ -172,6 +159,67 @@ fn parse_line(line: &str) -> FixEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::{future, StreamExt};
+
+    #[test]
+    fn real_subprocess_completion_events() {
+        let context = MainContext::default();
+        // spawn() pumps events on the default context, just as in the UI.
+        context
+            .with_thread_default(|| {
+                for (script, expected) in [
+                    ("exit 0", 0),
+                    ("exit 1", 1),
+                    ("exit 126", 126),
+                    ("exit 127", 127),
+                    ("exit 42", 42),
+                    ("kill -TERM $$", -15),
+                ] {
+                    context.block_on(async {
+                        let output_script = format!(
+                            "printf '[STEPS] check\\n[STEP] check\\n\\nlog\\377\\nlast'; {script}"
+                        );
+                        let handle = spawn(FixMode::Mock { script: &output_script }, None)
+                            .expect("spawn shell");
+                        let collect = handle.events.collect::<Vec<_>>();
+                        let timeout = glib::timeout_future(std::time::Duration::from_secs(5));
+                        futures::pin_mut!(collect, timeout);
+                        let events = match future::select(collect, timeout).await {
+                            future::Either::Left((events, _)) => events,
+                            future::Either::Right(_) => {
+                                handle.subprocess.force_exit();
+                                handle.subprocess.wait_future().await.expect("reap shell");
+                                panic!("timed out waiting for events: {script}");
+                            }
+                        };
+                        let completion: Vec<_> = events.iter().filter(|event| {
+                            matches!(event, FixEvent::Done(_) | FixEvent::SpawnError(_))
+                        }).collect();
+                        assert!(
+                            matches!(completion.as_slice(), [FixEvent::Done(rc)] if *rc == expected),
+                            "{script}: expected Done({expected}), got {events:?}"
+                        );
+                        let output: Vec<_> = events.iter().filter(|event| {
+                            !matches!(event, FixEvent::Done(_) | FixEvent::SpawnError(_))
+                        }).collect();
+                        assert!(matches!(output.as_slice(), [
+                            FixEvent::Steps(steps),
+                            FixEvent::Step(step),
+                            FixEvent::LogLine(blank),
+                            FixEvent::LogLine(log),
+                            FixEvent::LogLine(last),
+                        ] if steps == &["check"] && step == "check" && blank.is_empty()
+                            && log == "log\u{fffd}" && last == "last"), "{script}: {events:?}");
+                        assert_eq!(
+                            events.iter().any(|event| matches!(event, FixEvent::Done(0))),
+                            expected == 0,
+                            "only normal exit 0 may take the UI success path: {script}"
+                        );
+                    });
+                }
+            })
+            .expect("acquire the default main context");
+    }
 
     #[test]
     fn parse_steps_preamble() {
