@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use futures::AsyncBufReadExt;
 use gio::prelude::*;
 use glib::MainContext;
 use zeroize::Zeroizing;
@@ -100,13 +101,14 @@ pub fn spawn(mode: FixMode<'_>, password: Option<Zeroizing<Vec<u8>>>) -> Result<
         let Some(stdout) = proc_for_reader.stdout_pipe() else {
             return;
         };
-        let data_in = gio::DataInputStream::new(&stdout);
+        // Read bytes so EOF is an explicit zero-length read, without the
+        // nullable EOF buffer in GIO's read_line binding. Keep lossy UTF-8 logs.
+        let mut data_in = stdout.into_async_buf_read(4096);
         loop {
-            match data_in.read_line_future(glib::Priority::DEFAULT).await {
-                Ok(bytes) => {
-                    if bytes.is_empty() {
-                        break;
-                    }
+            let mut bytes = Vec::new();
+            match data_in.read_until(b'\n', &mut bytes).await {
+                Ok(0) => break,
+                Ok(_) => {
                     let line = String::from_utf8_lossy(&bytes).into_owned();
                     let event = parse_line(&line);
                     if tx_reader.unbounded_send(event).is_err() {
@@ -129,7 +131,9 @@ pub fn spawn(mode: FixMode<'_>, password: Option<Zeroizing<Vec<u8>>>) -> Result<
             Err(e) => FixEvent::SpawnError(format!("waiting for subprocess: {e}")),
             Ok(()) if proc_for_wait.has_exited() => FixEvent::Done(proc_for_wait.exit_status()),
             Ok(()) if proc_for_wait.has_signaled() => FixEvent::Done(-proc_for_wait.term_sig()),
-            Ok(()) => FixEvent::SpawnError("subprocess ended without an exit code or signal".into()),
+            Ok(()) => {
+                FixEvent::SpawnError("subprocess ended without an exit code or signal".into())
+            }
         };
         let _ = tx_wait.unbounded_send(event);
     });
@@ -172,7 +176,11 @@ mod tests {
                     ("kill -TERM $$", -15),
                 ] {
                     context.block_on(async {
-                        let handle = spawn(FixMode::Mock { script }, None).expect("spawn shell");
+                        let output_script = format!(
+                            "printf '[STEPS] check\\n[STEP] check\\n\\nlog\\377\\nlast'; {script}"
+                        );
+                        let handle = spawn(FixMode::Mock { script: &output_script }, None)
+                            .expect("spawn shell");
                         let collect = handle.events.collect::<Vec<_>>();
                         let timeout = glib::timeout_future(std::time::Duration::from_secs(5));
                         futures::pin_mut!(collect, timeout);
@@ -184,10 +192,24 @@ mod tests {
                                 panic!("timed out waiting for events: {script}");
                             }
                         };
+                        let completion: Vec<_> = events.iter().filter(|event| {
+                            matches!(event, FixEvent::Done(_) | FixEvent::SpawnError(_))
+                        }).collect();
                         assert!(
-                            matches!(events.as_slice(), [FixEvent::Done(rc)] if *rc == expected),
+                            matches!(completion.as_slice(), [FixEvent::Done(rc)] if *rc == expected),
                             "{script}: expected Done({expected}), got {events:?}"
                         );
+                        let output: Vec<_> = events.iter().filter(|event| {
+                            !matches!(event, FixEvent::Done(_) | FixEvent::SpawnError(_))
+                        }).collect();
+                        assert!(matches!(output.as_slice(), [
+                            FixEvent::Steps(steps),
+                            FixEvent::Step(step),
+                            FixEvent::LogLine(blank),
+                            FixEvent::LogLine(log),
+                            FixEvent::LogLine(last),
+                        ] if steps == &["check"] && step == "check" && blank.is_empty()
+                            && log == "log\u{fffd}" && last == "last"), "{script}: {events:?}");
                         assert_eq!(
                             events.iter().any(|event| matches!(event, FixEvent::Done(0))),
                             expected == 0,
