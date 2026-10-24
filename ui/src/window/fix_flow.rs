@@ -21,6 +21,7 @@ thread_local! {
 struct ProgressBits {
     step_list: StepList,
     log_buffer: gtk::TextBuffer,
+    cancel: gtk::Button,
 }
 
 struct FlowState {
@@ -32,6 +33,7 @@ struct FlowState {
     progress: Rc<ProgressBits>,
     failure_log: gtk::TextBuffer,
     handle: Rc<RefCell<Option<FixHandle>>>,
+    lifecycle: RefCell<pkexec::RepairLifecycle>,
 }
 
 pub fn build_fix_flow_page(
@@ -54,10 +56,11 @@ pub fn build_fix_flow_page(
         .transition_duration(180)
         .build();
 
-    let (progress_widget, step_list, log_buffer) = build_progress_skeleton();
+    let (progress_widget, step_list, log_buffer, cancel) = build_progress_skeleton();
     let progress = Rc::new(ProgressBits {
         step_list,
         log_buffer,
+        cancel,
     });
     let (failure_widget, failure_log_buf) = build_failure_skeleton();
 
@@ -70,6 +73,7 @@ pub fn build_fix_flow_page(
         progress: progress.clone(),
         failure_log: failure_log_buf.clone(),
         handle: Rc::new(RefCell::new(None)),
+        lifecycle: RefCell::new(pkexec::RepairLifecycle::default()),
     });
 
     stack.add_named(&build_confirm_page(state.clone()), Some("confirm"));
@@ -203,6 +207,7 @@ fn wire_luks_page(builder: &gtk::Builder, state: Rc<FlowState>) {
     let state_cont = state;
     cont.connect_clicked(move |_| {
         let pw = Zeroizing::new(pw_row.text().as_bytes().to_vec());
+        pw_row.set_text("");
         launch_fix(state_cont.clone(), Some(pw));
     });
 }
@@ -245,7 +250,7 @@ fn wire_mok_page(builder: &gtk::Builder, state: Rc<FlowState>) {
     });
 }
 
-fn build_progress_skeleton() -> (gtk::Widget, StepList, gtk::TextBuffer) {
+fn build_progress_skeleton() -> (gtk::Widget, StepList, gtk::TextBuffer, gtk::Button) {
     let builder =
         gtk::Builder::from_resource("/io/github/gitii/SecurebootWatchdog/screen6_progress.ui");
     let root: gtk::Box = builder.object("screen6_root").expect("screen6_root");
@@ -255,7 +260,7 @@ fn build_progress_skeleton() -> (gtk::Widget, StepList, gtk::TextBuffer) {
     cancel.set_widget_name("progress_cancel_btn");
     let step_list = StepList::new(step_box);
     let buf = log_view.buffer();
-    (root.upcast(), step_list, buf)
+    (root.upcast(), step_list, buf, cancel)
 }
 
 fn wire_progress_cancel(progress_widget: &gtk::Widget, state: Rc<FlowState>) {
@@ -263,6 +268,9 @@ fn wire_progress_cancel(progress_widget: &gtk::Widget, state: Rc<FlowState>) {
         .and_then(|w| w.downcast::<gtk::Button>().ok())
     {
         btn.connect_clicked(move |_| {
+            if !state.lifecycle.borrow().can_cancel(&state.issue.code) {
+                return;
+            }
             if let Some(h) = state.handle.borrow_mut().take() {
                 h.subprocess.force_exit();
             }
@@ -274,6 +282,11 @@ fn build_success_page(state: Rc<FlowState>) -> gtk::Widget {
     let builder =
         gtk::Builder::from_resource("/io/github/gitii/SecurebootWatchdog/screen7_done.ui");
     let root: gtk::Box = builder.object("screen7_root").expect("screen7_root");
+    if state.issue.code == "TPM_PCR_DRIFT" {
+        let status: adw::StatusPage = builder.object("status").expect("status");
+        status.set_title("TPM enrollment replaced");
+        status.set_description(Some("A subsequent boot has not been verified. Keep your LUKS passphrase available when rebooting."));
+    }
     let later: gtk::Button = builder.object("later_btn").expect("later_btn");
     let reboot: gtk::Button = builder.object("reboot_btn").expect("reboot_btn");
 
@@ -346,6 +359,22 @@ fn wire_failure_buttons(
 // -------------------- Fix launch + event pump --------------------
 
 fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
+    if !state.lifecycle.borrow_mut().begin() {
+        return;
+    }
+    let can_cancel = state.lifecycle.borrow().can_cancel(&state.issue.code);
+    state.progress.cancel.set_sensitive(can_cancel);
+    state.progress.cancel.set_tooltip_text(if can_cancel {
+        None
+    } else {
+        Some("Enrollment changes must finish. Closing this window does not cancel the repair.")
+    });
+    if !can_cancel {
+        state
+            .progress
+            .cancel
+            .set_label("Enrollment changes must finish");
+    }
     state.stack.set_visible_child_name("progress");
     state.progress.step_list.set_steps(&[]);
     state.progress.log_buffer.set_text("");
@@ -367,6 +396,7 @@ fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
     let handle = match pkexec::spawn(mode, password) {
         Ok(h) => h,
         Err(e) => {
+            state.lifecycle.borrow_mut().finish();
             state
                 .failure_log
                 .set_text(&format!("Failed to spawn fix: {e}"));
@@ -383,6 +413,7 @@ fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
 
     let state_evt = state;
     MainContext::default().spawn_local(async move {
+        let mut transport_error = None;
         while let Some(ev) = events.next().await {
             match ev {
                 FixEvent::Steps(steps) => {
@@ -400,13 +431,21 @@ fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
                         .insert(&mut end, &format!("{line}\n"));
                 }
                 FixEvent::SpawnError(msg) => {
+                    if state_evt.issue.code == "TPM_PCR_DRIFT" {
+                        // An IO error does not prove the helper has stopped.
+                        // Keep cancellation/retry locked until its wait result.
+                        transport_error = Some(msg);
+                        continue;
+                    }
+                    state_evt.lifecycle.borrow_mut().finish();
                     state_evt.failure_log.set_text(&msg);
                     state_evt.progress.step_list.mark_current_failed();
                     state_evt.stack.set_visible_child_name("failed");
                     return;
                 }
                 FixEvent::Done(rc) => {
-                    if rc == 0 {
+                    state_evt.lifecycle.borrow_mut().finish();
+                    if rc == 0 && transport_error.is_none() {
                         state_evt.progress.step_list.mark_all_done();
                         state_evt.stack.set_visible_child_name("success");
                     } else {
@@ -415,14 +454,30 @@ fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
                             &state_evt.progress.log_buffer.end_iter(),
                             false,
                         );
-                        state_evt
-                            .failure_log
-                            .set_text(&format!("Fix script exited with code {rc}.\n\n{text}"));
+                        state_evt.failure_log.set_text(&format!(
+                            "Fix script exited with code {rc}.\n{}\n{text}",
+                            transport_error.as_deref().unwrap_or("")
+                        ));
                         state_evt.progress.step_list.mark_current_failed();
                         state_evt.stack.set_visible_child_name("failed");
                     }
                     *state_evt.handle.borrow_mut() = None;
                     return;
+                }
+            }
+        }
+        if let Some(error) = transport_error {
+            // A wait error has no Done event. Do not permit a second TPM
+            // attempt while completion is unknown; reopening revalidates it.
+            state_evt.failure_log.set_text(&format!(
+                "{error}\nRepair completion is unknown. Inspect enrollment before trying again."
+            ));
+            state_evt.progress.step_list.mark_current_failed();
+            state_evt.stack.set_visible_child_name("failed");
+            if let Some(page) = state_evt.page.borrow().as_ref() {
+                if let Some(retry) = find_descendant_by_name(page.upcast_ref(), "failure_retry_btn")
+                {
+                    retry.set_sensitive(false);
                 }
             }
         }

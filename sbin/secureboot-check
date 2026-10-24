@@ -222,13 +222,13 @@ check_tpm_pcr_drift() {
     [[ $evidence != '[]' ]] || return 0
     lockout=$(jq 'any(.[]; .message | test("lockout|TPM_RC_LOCKOUT|0x0*921\\b"; "i"))' <<<"$evidence")
     detail="Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift."
-    detail+=$'\n\n'"Automatic TPM repair is disabled. Review the disk's existing TPM enrollment and policy before making changes."
+    detail+=$'\n\n'"Automatic repair is available only for one unambiguous disk with a reproducible supported policy. Review the target and policy before replacing enrollment."
     if [[ $lockout == true ]]; then
         detail+=$'\n\n'"Explicit TPM lockout was reported. Consult your TPM administrator or platform documentation for manual dictionary-attack lockout recovery. Re-enrollment is not a lockout cure."
     fi
     preflight=$(tpm_preflight "$evidence" "$CRYPTTAB") || preflight=$(tpm_refuse 'Cannot validate the repair plan.')
     ISSUES_JSON+=("$(jq -nc --arg detail "$detail" --argjson evidence "$evidence" --argjson preflight "$preflight" \
-        '{code:"TPM_PCR_DRIFT", severity:"warning", summary:"Cryptsetup reported a TPM disk-unlock error", detail:$detail, auto_fixable:false, tpm_evidence:$evidence, tpm_preflight:$preflight}')")
+        '{code:"TPM_PCR_DRIFT", severity:"warning", summary:"Cryptsetup reported a TPM disk-unlock error", detail:$detail, auto_fixable:$preflight.eligible, tpm_evidence:$evidence, tpm_preflight:$preflight}')")
 }
 
 if (( ! TPM_FIXTURES )); then

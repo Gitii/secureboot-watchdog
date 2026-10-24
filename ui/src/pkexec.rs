@@ -7,7 +7,7 @@
 //!   `+ <command>`       — `run()` wrapper trace
 //!   anything else       — passed through as a log line
 //!
-//! Cancel is a SIGTERM on the returned `Subprocess` handle.
+//! The UI may force-exit other repairs, but never a launched TPM replacement.
 
 use crate::status::TpmPlan;
 use anyhow::Result;
@@ -45,6 +45,30 @@ pub enum FixMode<'a> {
 pub struct FixHandle {
     pub subprocess: gio::Subprocess,
     pub events: UnboundedReceiver<FixEvent>,
+}
+
+/// Headless launch/cancel state shared by the UI wiring and lifecycle tests.
+#[derive(Default)]
+pub struct RepairLifecycle {
+    launched: bool,
+}
+
+impl RepairLifecycle {
+    pub fn begin(&mut self) -> bool {
+        if self.launched {
+            return false;
+        }
+        self.launched = true;
+        true
+    }
+
+    pub fn can_cancel(&self, code: &str) -> bool {
+        code != "TPM_PCR_DRIFT" || !self.launched
+    }
+
+    pub fn finish(&mut self) {
+        self.launched = false;
+    }
 }
 
 fn pkexec_argv(code: &str, plan: Option<&TpmPlan>) -> Result<Vec<String>> {
@@ -175,6 +199,20 @@ mod tests {
     use futures::{future, StreamExt};
 
     #[test]
+    fn cancellation_is_locked_before_tpm_spawn() {
+        let mut state = RepairLifecycle::default();
+        assert!(state.can_cancel("TPM_PCR_DRIFT")); // prelaunch: no child exists
+        assert!(!state.launched);
+        assert!(state.begin()); // called before spawn, not after it
+        assert!(!state.can_cancel("TPM_PCR_DRIFT"));
+        assert!(!state.begin());
+        assert!(state.can_cancel("DKMS_UNSIGNED"));
+        state.finish();
+        assert!(state.can_cancel("TPM_PCR_DRIFT"));
+        assert!(state.begin());
+    }
+
+    #[test]
     fn tpm_confirmation_constraints_are_one_json_argument() {
         let status: crate::status::Status =
             serde_json::from_str(include_str!("../fixtures/screen4_luks_tpm.json")).unwrap();
@@ -265,10 +303,10 @@ mod tests {
 
     #[test]
     fn parse_steps_preamble() {
-        let e = parse_line("[STEPS] clear-lockout|wipe-old-slot|seal-new-slot\n");
+        let e = parse_line("[STEPS] replace-enrollment|cleanup-key\n");
         match e {
             FixEvent::Steps(v) => {
-                assert_eq!(v, vec!["clear-lockout", "wipe-old-slot", "seal-new-slot"]);
+                assert_eq!(v, vec!["replace-enrollment", "cleanup-key"]);
             }
             _ => panic!("expected Steps"),
         }
@@ -276,13 +314,13 @@ mod tests {
 
     #[test]
     fn parse_step_advance() {
-        let e = parse_line("[STEP] seal-new-slot\n");
-        assert!(matches!(e, FixEvent::Step(s) if s == "seal-new-slot"));
+        let e = parse_line("[STEP] replace-enrollment\n");
+        assert!(matches!(e, FixEvent::Step(s) if s == "replace-enrollment"));
     }
 
     #[test]
     fn parse_log_line() {
-        let e = parse_line("+ systemd-cryptenroll --wipe-slot=tpm2 /dev/foo\n");
-        assert!(matches!(e, FixEvent::LogLine(s) if s.contains("systemd-cryptenroll")));
+        let e = parse_line("TPM enrollment replaced. A subsequent boot has not been verified.\n");
+        assert!(matches!(e, FixEvent::LogLine(s) if s.contains("TPM enrollment replaced")));
     }
 }

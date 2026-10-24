@@ -21,10 +21,17 @@ export PATH="$tmp/bin:$PATH" TRACE="$tmp/actions" ROUTE="$tmp/route"
 export STATUS_FILE="$tmp/status" XDG_RUNTIME_DIR="$tmp"
 cp ui/fixtures/screen4_luks_tpm.json "$STATUS_FILE"
 bash bin/secureboot-notify --popup TPM_PCR_DRIFT 'TPM issue'
+grep -q 'fix=Fix now' "$TRACE"
+grep -qx fix "$ROUTE"
+grep -qx ExitType=cgroup "$ROUTE"
+# Disabled or incomplete plans do not authorize a password/repair flow.
+jq '.issues[0].auto_fixable = false' "$STATUS_FILE" > "$tmp/disabled-tpm"
+cp "$tmp/disabled-tpm" "$STATUS_FILE"
+bash bin/secureboot-notify --popup TPM_PCR_DRIFT 'TPM issue'
 if grep -q 'fix=Fix now' "$TRACE"; then exit 1; fi
 grep -qx details "$ROUTE"
-# A stale repairable TPM status must remain blocked, too.
-jq '.issues[0].auto_fixable = true' "$STATUS_FILE" > "$tmp/stale"
+# A stale repairable TPM status without the confirmed-plan contract is blocked.
+jq '.issues[0].auto_fixable = true | del(.issues[0].tpm_preflight)' "$STATUS_FILE" > "$tmp/stale"
 cp "$tmp/stale" "$STATUS_FILE"
 bash bin/secureboot-notify --popup TPM_PCR_DRIFT 'TPM issue'
 if grep -q 'fix=Fix now' "$TRACE"; then exit 1; fi

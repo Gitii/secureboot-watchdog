@@ -34,14 +34,14 @@ passphrase entry, final activation failure, or a particular PCR policy change.
 The issue includes structured `tpm_evidence` (mapping, configured source, unit,
 message and process identity), not just prose.
 
-Automatic TPM repair is currently disabled, including direct helper calls and
-stale notification actions. Review the affected disk's enrollment and existing
-policy manually. Only explicit lockout evidence calls for manual TPM lockout
-recovery guidance; generic argument or permission errors do not prove lockout.
+Automatic TPM repair is restricted to validated supported plans. Unsupported
+enrollments require manual review. Only explicit lockout evidence calls for
+manual TPM lockout recovery guidance; generic argument or permission errors
+do not prove lockout.
 
 The shared read-only preflight adds `tpm_preflight` with eligibility, a reason,
-and (when supported) a structured plan shown in Details. Eligibility is not
-repair authorization: no TPM password prompt or repair launch is enabled yet.
+and (when supported) a structured plan shown for confirmation before requesting
+the existing LUKS passphrase. Root must validate the same plan before execution.
 Only one affected mapping is allowed; other unrelated TPM disks are fine.
 Preflight resolves the LUKS UUID and requires one TPM token and one existing
 keyslot, explicit nonempty static PCRs and bank, no PIN/signed-PCR/PCRlock,
@@ -58,15 +58,40 @@ preflight refuses eligibility. This follows systemd 255's
 and tpm2-tools' [`--serialized-handle`](https://github.com/tpm2-software/tpm2-tools/blob/5.7/tools/tpm2_readpublic.c).
 Test serialization is synthetic and never accesses a TPM.
 
-The prepared confirmation contract passes the plain JSON plan as
+The confirmation contract passes the plain JSON plan as
 `--expected-tpm-plan` to the privileged helper. It includes UUID, mapping,
 crypttab options, token ID and complete supported token metadata, plus explicit
 PCR selection/bank and sealing-key handle. Root independently reads current-boot
 journal evidence, `/etc/crypttab` and current LUKS/TPM metadata, then compares
 every constraint; a different eligible target or changed token/policy is not a
 substitute for the confirmed plan. There is no first-disk fallback, `TPM2_PCRS`
-override or implicit 7+11 policy. Even a matching plan is refused until safe
-replacement execution is implemented.
+override or implicit 7+11 policy.
+
+Replacement uses one `systemd-cryptenroll` invocation with TPM enrollment and
+`--wipe-slot=tpm2`. The documented guarantee was checked against Ubuntu 24.04's
+[systemd **255.4-1ubuntu8.18**](https://manpages.ubuntu.com/manpages/noble/man1/systemd-cryptenroll.1.html)
+and Ubuntu 26.04's
+[systemd-cryptsetup **259.9-0ubuntu0.1**](https://manpages.ubuntu.com/manpages/resolute/man1/systemd-cryptenroll.1.html):
+enrollment completes first; wiping runs only if enrollment succeeds and always
+excludes the newly added slot. This is not a promise of atomicity across power
+loss or failures during old-slot cleanup. Any command/cleanup failure is reported
+as failure; inspect enrollment before retrying. PCR indices/bank and sealing key
+are explicit, PIN is disabled, and automatic signed-PCR/PCRlock policy discovery
+is disabled. No TPM-wide lockout reset is attempted; `tpm2-tools` remains
+recommended for read-only key validation and optional manual administration.
+
+The helper reads the passphrase only from stdin, stores it briefly in a mode-600
+temporary key file, and removes it on normal exit or catchable termination.
+Termination stops and waits for the enrollment child before key cleanup.
+SIGKILL and power loss cannot guarantee cleanup. A dry run never enrolls or
+wipes slots or changes TPM state. UI cancellation is available before launch,
+then disabled for the entire TPM attempt: enrollment changes must finish.
+Closing the page/window or its output pipe does not kill the helper; the result
+may no longer be visible. Success means **enrollment replaced**, not a verified
+subsequent boot. Keep your LUKS passphrase available when rebooting.
+Notification-launched UI units use `ExitType=cgroup` so the user service does
+not terminate a still-running helper when the UI's main process exits. Other
+repair codes retain their Cancel action.
 
 ## How it works
 

@@ -6,6 +6,8 @@ set -uo pipefail
 shopt -s nullglob
 # shellcheck source=sbin/secureboot-tpm-preflight
 source "$(dirname -- "${BASH_SOURCE[0]}")/secureboot-tpm-preflight"
+# shellcheck source=sbin/secureboot-tpm-replace
+source "$(dirname -- "${BASH_SOURCE[0]}")/secureboot-tpm-replace"
 
 STATUS_FILE=${STATUS_FILE:-/run/secureboot-monitor/status.json}
 MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
@@ -272,7 +274,8 @@ fix_SBAT_REVOKED() {
 }
 
 fix_TPM_PCR_DRIFT() {
-    echo "Automatic TPM repair is disabled; review the attributed disk evidence and existing enrollment manually." >&2
+    # Protect the entire TPM attempt, including preflight and status refresh.
+    trap '' PIPE HUP
     local journal evidence current
     journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 1
     evidence=$(tpm_evidence "$journal" /etc/crypttab) || return 1
@@ -281,8 +284,7 @@ fix_TPM_PCR_DRIFT() {
         echo 'Refusing missing, stale or ineligible TPM plan. Review current disk and enrollment details.' >&2
         return 1
     fi
-    # No stdin read or mutation until safe replacement exists (task 3).
-    return 1
+    tpm_replace "$(jq -c .plan <<<"$current")" "$DRY_RUN"
 }
 
 # Dispatch

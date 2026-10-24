@@ -116,15 +116,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_fix_routes_without_starting_secret_or_repair_flow() {
+    fn direct_fix_requires_eligible_tpm_plan() {
         let mut status: Status =
             serde_json::from_str(include_str!("../../fixtures/screen4_luks_tpm.json")).unwrap();
         assert!(matches!(
             InitialRoute::for_fix(&status, "TPM_PCR_DRIFT"),
-            InitialRoute::Details(_)
+            InitialRoute::Fix(_)
         ));
-        // Old status files must not bypass the intermediate TPM repair gate.
+        // Stale/incomplete status files cannot enter password/progress.
         status.issues[0].auto_fixable = true;
+        status.issues[0].tpm_preflight = None;
         assert!(matches!(
             InitialRoute::for_fix(&status, "TPM_PCR_DRIFT"),
             InitialRoute::Details(_)
