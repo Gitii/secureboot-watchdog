@@ -2,7 +2,7 @@
 
 A small Debian package that detects when the **Secure Boot chain** on a
 systemd-boot Linux machine stops being healthy — after a kernel update, a
-firmware change, a DKMS rebuild, an SBAT revocation, or a TPM PCR shift — and
+firmware change, a DKMS rebuild, an SBAT revocation, or a TPM unlock error — and
 shows a native **GNOME notification**. For repairable issues, one click starts
 a polkit-elevated, issue-scoped repair flow.
 
