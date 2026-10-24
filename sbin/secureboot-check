@@ -216,7 +216,7 @@ check_tpm_pcr_drift() {
     else
         journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 0
     fi
-    while read -r name source _key options rest; do
+    while read -r name source _key options rest || [[ -n $name ]]; do
         [[ -n $name && $name != \#* && -n $source ]] || continue
         [[ ,$options, == *,tpm2-device=*,* ]] || continue
         # crypttab uses octal escapes; systemd's own escaping handles hyphens,

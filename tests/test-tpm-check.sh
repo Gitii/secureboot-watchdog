@@ -24,6 +24,9 @@ jq -e '
       (.detail | contains("manual dictionary-attack") | not))
 ' "$tmp/status" >/dev/null
 check lockout | jq -e '.issues[0] | .auto_fixable == false and (.detail | contains("manual dictionary-attack lockout recovery"))' >/dev/null
+printf 'nvme0n1p3_crypt UUID=primary-luks none luks,tpm2-device=auto' > "$tmp/crypttab"
+bash sbin/secureboot-check --tpm-fixtures tests/fixtures/cryptsetup-fallback.jsonl "$tmp/crypttab" \
+    | jq -e '.issues[0].tpm_evidence | length == 2' >/dev/null
 
 # Direct and dry-run invocations must refuse before any sensitive command or
 # stdin read. Stub the status refresh too, keeping tests independent of systemd.
