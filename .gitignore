@@ -29,3 +29,6 @@ ui/target/
 
 # Output of make deb
 dist/
+
+# Disposable implementation task lists
+*.tasklist.md
