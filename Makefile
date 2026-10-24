@@ -4,7 +4,7 @@ SUDO      := $(if $(filter 0,$(shell id -u)),,sudo)
 DIST      := dist
 
 SCRIPTS   := bin/secureboot-notify sbin/secureboot-check sbin/secureboot-fix \
-             kernel/zzz-secureboot-recheck debian/postinst scripts/*.sh
+             kernel/zzz-secureboot-recheck debian/postinst scripts/*.sh tests/*.sh
 UNITS     := systemd/*.service systemd/*.timer systemd/*.path
 
 # Ubuntu 24.04 ships its new-enough Rust toolchain outside PATH; see debian/rules.
@@ -18,6 +18,8 @@ all:
 	cd $(UI) && cargo build --release --locked
 
 check:
+	bash tests/test-tpm-check.sh
+	bash tests/test-notify.sh
 	cd $(UI) && cargo test --locked
 	@cargo_ver="$$(sed -n 's/^version = "\(.*\)"/\1/p' $(UI)/Cargo.toml | head -n1)"; \
 	  deb_ver="$$(dpkg-parsechangelog -S Version | sed 's/[~+].*//')"; \

@@ -6,9 +6,17 @@
     {
       "code": "TPM_PCR_DRIFT",
       "severity": "warning",
-      "summary": "TPM2 LUKS unlock failed at boot",
-      "detail": "systemd-cryptsetup could not unseal the LUKS key from the TPM, so you had to type your passphrase. Most common cause: a sealed PCR value (usually PCR 7 — Secure Boot policy) changed since enrollment.\n\nRecent journal lines:\nFailed to unseal secret using TPM2: Operation not permitted\nFailed to unseal secret using TPM2: Operation not permitted\n\nClick Fix to re-seal the TPM2 keyslot against the current PCR values. You will be asked for your LUKS passphrase.",
-      "auto_fixable": true
+      "summary": "Cryptsetup reported a TPM disk-unlock error",
+      "detail": "Cryptsetup reported a TPM unlock error during this boot. This does not establish whether a passphrase was entered or disk activation ultimately failed. Changed PCR values are one possible cause; the journal alone does not prove PCR drift.\n\nAutomatic TPM repair is disabled. Review the disk's existing TPM enrollment and policy before making changes.",
+      "auto_fixable": false,
+      "tpm_evidence": [{
+        "mapping": "nvme0n1p3_crypt",
+        "source": "UUID=example-luks-uuid",
+        "unit": "systemd-cryptsetup@nvme0n1p3_crypt.service",
+        "message": "Failed to unseal secret using TPM2: Operation not permitted",
+        "comm": "systemd-cryptse",
+        "exe": "/usr/lib/systemd/systemd-cryptsetup"
+      }]
     }
   ]
 }

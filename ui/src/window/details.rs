@@ -2,7 +2,7 @@
 
 use adw::prelude::*;
 
-use crate::status::{is_info_only, Issue};
+use crate::status::Issue;
 
 /// Build the details `AdwNavigationPage`. `on_fix` fires when the user clicks
 /// "Fix now" (only relevant for fixable codes).
@@ -33,9 +33,9 @@ where
 
     headline.set_label(&issue.summary);
     severity_cap.set_label(issue.severity.caption());
-    detail_view.buffer().set_text(&issue.detail);
+    detail_view.buffer().set_text(&issue.details_text());
 
-    let fixable = issue.auto_fixable && !is_info_only(&issue.code);
+    let fixable = issue.can_fix();
     fix_btn.set_visible(fixable);
     dismiss_btn.set_label(if fixable { "Cancel" } else { "Got it" });
 

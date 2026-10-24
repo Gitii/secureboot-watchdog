@@ -267,71 +267,11 @@ fix_SBAT_REVOKED() {
     fi
 }
 
-find_luks_tpm_device() {
-    # Return the underlying block device (resolved from /etc/crypttab) for the
-    # first LUKS entry configured with tpm2-device=. Echo the device path.
-    local name source rest dev
-    while read -r name source rest; do
-        [[ -z $name || $name == \#* ]] && continue
-        grep -q 'tpm2-device=' <<<"$rest" || continue
-        case $source in
-            UUID=*)     dev="/dev/disk/by-uuid/${source#UUID=}";;
-            PARTUUID=*) dev="/dev/disk/by-partuuid/${source#PARTUUID=}";;
-            /dev/*)     dev=$source;;
-            *)          dev=$source;;
-        esac
-        [[ -e $dev ]] && { readlink -f "$dev"; return 0; }
-    done < /etc/crypttab
-    return 1
-}
-
 fix_TPM_PCR_DRIFT() {
-    steps_declare "clear-lockout|wipe-old-slot|seal-new-slot|finalize"
-    local pw dev keyfile pcrs=${TPM2_PCRS:-7+11}
-
-    if ! IFS= read -r pw; then
-        echo "no LUKS passphrase on stdin — cannot re-enroll TPM2 slot" >&2
-        return 1
-    fi
-    dev=$(find_luks_tpm_device) || {
-        echo "could not find a LUKS device with tpm2-device= in /etc/crypttab" >&2
-        return 1
-    }
-    echo "Re-sealing TPM2 keyslot on $dev against PCRs $pcrs"
-
-    step_enter "clear-lockout"
-    # Best-effort: clear TPM dictionary-attack lockout. May fail if lockout
-    # hierarchy has an auth password set — that's the user's TPM admin
-    # password and we don't know it; continue regardless.
-    if command -v tpm2_dictionarylockout >/dev/null; then
-        run tpm2_dictionarylockout --clear-lockout 2>&1 || \
-            echo "(could not clear TPM DA lockout — continuing; may already be cleared or hierarchy is owned)"
-    else
-        echo "(tpm2-tools not installed; skipping DA lockout reset — install with: sudo apt install tpm2-tools)"
-    fi
-
-    keyfile=$(mktemp)
-    chmod 600 "$keyfile"
-    printf '%s' "$pw" > "$keyfile"
-    unset pw
-    trap 'rm -f "$keyfile"' RETURN
-
-    if (( DRY_RUN )); then
-        step_enter "wipe-old-slot"
-        echo "[dry-run] systemd-cryptenroll --unlock-key-file=<luks-passphrase> --wipe-slot=tpm2 $dev"
-        step_enter "seal-new-slot"
-        echo "[dry-run] systemd-cryptenroll --unlock-key-file=<luks-passphrase> --tpm2-device=auto --tpm2-pcrs=$pcrs $dev"
-        step_enter "finalize"
-        return 0
-    fi
-
-    step_enter "wipe-old-slot"
-    # Wipe-slot may fail if no TPM2 slot currently exists — that's OK, log and continue.
-    systemd-cryptenroll --unlock-key-file="$keyfile" --wipe-slot=tpm2 "$dev" \
-        || echo "(wipe-slot: no existing TPM2 slot to remove, or wipe failed — continuing)"
-    step_enter "seal-new-slot"
-    systemd-cryptenroll --unlock-key-file="$keyfile" --tpm2-device=auto --tpm2-pcrs="$pcrs" "$dev"
-    step_enter "finalize"
+    # No stdin read or TPM/LUKS mutation until policy-bound safe replacement
+    # exists. This also refuses stale notifications and direct invocations.
+    echo "Automatic TPM repair is disabled; review the attributed disk evidence and existing enrollment manually." >&2
+    return 1
 }
 
 # Dispatch

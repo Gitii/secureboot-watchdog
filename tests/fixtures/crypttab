@@ -1,0 +1,7 @@
+# comment-only UUID=ignored none tpm2-device=auto
+nvme0n1p3_crypt UUID=primary-luks none luks,tpm2-device=auto
+data-disk UUID=secondary-luks none tpm2-device=auto,luks
+space\040disk UUID=space-luks none luks,tpm2-device=auto
+plain UUID=non-tpm none luks
+#disabled UUID=disabled none tpm2-device=auto
+comment-option UUID=comment none luks # tpm2-device=auto

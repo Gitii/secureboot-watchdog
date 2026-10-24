@@ -122,9 +122,7 @@ fn dispatch(app: &adw::Application, cli: &Cli) -> anyhow::Result<()> {
         Some(Cmd::Details { code }) => {
             find_issue(&status, code).map_or(InitialRoute::Overview, InitialRoute::Details)
         }
-        Some(Cmd::Fix { code }) => {
-            find_issue(&status, code).map_or(InitialRoute::Overview, InitialRoute::Fix)
-        }
+        Some(Cmd::Fix { code }) => InitialRoute::for_fix(&status, code),
     };
     let win = SecurebootWindow::build(app, status, route);
     present_window(&win);

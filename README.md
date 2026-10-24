@@ -3,8 +3,8 @@
 A small Debian package that detects when the **Secure Boot chain** on a
 systemd-boot Linux machine stops being healthy — after a kernel update, a
 firmware change, a DKMS rebuild, an SBAT revocation, or a TPM PCR shift — and
-shows a native **GNOME notification**. One click runs a polkit-elevated,
-issue-scoped repair.
+shows a native **GNOME notification**. For repairable issues, one click starts
+a polkit-elevated, issue-scoped repair flow.
 
 Built for Ubuntu 24.04 / Zorin OS 18 / systemd-boot. Should work on any
 systemd-boot + GNOME machine with the right tooling installed.
@@ -24,7 +24,20 @@ systemd-boot + GNOME machine with the right tooling installed.
 | `MOK_NOT_ENROLLED` | Local MOK key not enrolled in shim |
 | `MOK_PENDING` | MOK enrollment queued but not completed |
 | `SBAT_REVOKED` | Installed shim/systemd-boot below current SBAT revocation level |
-| `TPM_PCR_DRIFT` | TPM2 LUKS unlock failed (PCR mismatch) |
+| `TPM_PCR_DRIFT` | Cryptsetup reported an attributable TPM disk-unlock error; PCR drift is not proven |
+
+TPM disk alerts use structured current-boot journal provenance matched to
+uncommented TPM-enabled crypttab mappings, including systemd-escaped unit names.
+Unrelated service credential errors do not produce a disk alert. An alert can
+remain valid even if cryptsetup ultimately succeeded; it does not prove
+passphrase entry, final activation failure, or a particular PCR policy change.
+The issue includes structured `tpm_evidence` (mapping, configured source, unit,
+message and process identity), not just prose.
+
+Automatic TPM repair is currently disabled, including direct helper calls and
+stale notification actions. Review the affected disk's enrollment and existing
+policy manually. Only explicit lockout evidence calls for manual TPM lockout
+recovery guidance; generic argument or permission errors do not prove lockout.
 
 ## How it works
 
@@ -34,7 +47,8 @@ systemd-boot + GNOME machine with the right tooling installed.
 - A per-user `.path` unit watches the status file (and the notifier also
   runs at login). When the status reports `ok:false` it runs
   `/usr/bin/secureboot-notify`, which sends a GNOME notification with
-  *Fix now* / *Details* / *Dismiss* actions. A notification whose issue has
+  *Details* / *Dismiss* actions, plus *Fix now* only for repairable issues.
+  A notification whose issue has
   cleared on a later check is withdrawn.
 - *Fix now* prompts for confirmation, optionally collects a MOK enrollment
   password, then `pkexec`s `/usr/sbin/secureboot-fix --code <CODE>` to apply
