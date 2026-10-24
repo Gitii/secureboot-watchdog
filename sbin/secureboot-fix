@@ -273,9 +273,7 @@ fix_SBAT_REVOKED() {
     fi
 }
 
-fix_TPM_PCR_DRIFT() {
-    # Protect the entire TPM attempt, including preflight and status refresh.
-    trap '' PIPE HUP
+validated_tpm_plan() {
     local journal evidence current
     journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 1
     evidence=$(tpm_evidence "$journal" /etc/crypttab) || return 1
@@ -284,7 +282,29 @@ fix_TPM_PCR_DRIFT() {
         echo 'Refusing missing, stale or ineligible TPM plan. Review current disk and enrollment details.' >&2
         return 1
     fi
-    tpm_replace "$(jq -c .plan <<<"$current")" "$DRY_RUN"
+    jq -c .plan <<<"$current"
+}
+
+fix_TPM_PCR_DRIFT() {
+    # Protect the entire TPM attempt, including preflight and status refresh.
+    trap '' PIPE HUP
+    local lock_fd plan
+    if [[ -z $EXPECTED_TPM_PLAN ]]; then
+        echo 'Refusing missing, stale or ineligible TPM plan. Review current disk and enrollment details.' >&2
+        return 1
+    fi
+    # /run is root-owned and not user-writable. Never unlink this lock: every
+    # helper must lock the same inode. The FD stays open through EXIT cleanup.
+    umask 077
+    [[ ! -L /run/secureboot-watchdog-tpm.lock ]] || return 1
+    exec {lock_fd}>/run/secureboot-watchdog-tpm.lock || return 1
+    [[ -f /run/secureboot-watchdog-tpm.lock && -O /run/secureboot-watchdog-tpm.lock ]] || return 1
+    if ! flock -n "$lock_fd"; then
+        echo 'Another TPM repair is running; review its result before trying again.' >&2
+        return 1
+    fi
+    plan=$(validated_tpm_plan) || return 1
+    tpm_replace "$plan" "$DRY_RUN"
 }
 
 # Dispatch

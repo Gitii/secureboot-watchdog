@@ -66,6 +66,13 @@ journal evidence, `/etc/crypttab` and current LUKS/TPM metadata, then compares
 every constraint; a different eligible target or changed token/policy is not a
 substitute for the confirmed plan. There is no first-disk fallback, `TPM2_PCRS`
 override or implicit 7+11 policy.
+TPM helpers take a nonblocking exclusive lock at the fixed root-owned
+`/run/secureboot-watchdog-tpm.lock` before authoritative validation. The lock
+is held through child reaping and temporary-key cleanup. Another attempt is
+refused rather than queued. After receiving the passphrase, the helper repeats
+the full authoritative validation immediately before enrollment and derives
+the command from that final matching plan; a change while waiting for input
+refuses repair without enrolling.
 
 Replacement uses one `systemd-cryptenroll` invocation with TPM enrollment and
 `--wipe-slot=tpm2`. The documented guarantee was checked against Ubuntu 24.04's

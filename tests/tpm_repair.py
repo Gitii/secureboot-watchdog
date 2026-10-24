@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import tempfile
@@ -58,6 +59,9 @@ elif name == 'systemd-cryptenroll':
     (p/'state').write_text('old,new')
     if mode == 'wipe-failure': sys.exit(5)
     (p/'state').write_text('new')
+    metadata = json.loads((p/'metadata').read_text())
+    metadata['tokens']['4']['tpm2-blob'] = 'bmV3'
+    (p/'metadata').write_text(json.dumps(metadata))
 elif name == 'mktemp':
     if a and a[0].startswith('/run/secureboot-tpm-key.'):
         os.execv('/usr/bin/mktemp', ['mktemp', str(p/'unlock.XXXXXXXX')])
@@ -75,6 +79,9 @@ elif name == 'rm':
             else: sys.exit('cleanup ran while child was alive')
         (p/'cleanup').touch()
         if os.environ.get('MODE') == 'key-cleanup-failure': sys.exit(1)
+        if os.environ.get('MODE') == 'slow-cleanup':
+            (p/'cleanup-ready').touch()
+            time.sleep(0.5)
     os.execv('/usr/bin/rm', ['rm'] + a)
 elif name == 'systemctl': pass
 else: sys.exit('forbidden command: ' + name)
@@ -82,14 +89,32 @@ else: sys.exit('forbidden command: ' + name)
 
 
 def wait_ready(p, proc):
+    wait_file(p / "ready", proc)
+
+
+def wait_file(path, proc):
     deadline = time.monotonic() + 10
-    while not (p / "ready").exists():
+    while not path.exists():
         assert proc.poll() is None, "helper exited before child ready"
         assert time.monotonic() < deadline, "child startup timeout"
         time.sleep(0.01)
 
 
-def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_secret=True):
+def competitor(args, env, p, locked=True):
+    before = (p / "trace").read_text().splitlines()
+    result = subprocess.run(args, env=env, input=(SECRET + "\n").encode(),
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10)
+    assert result.returncode != 0, result.stdout
+    assert SECRET.encode() not in result.stdout
+    assert (b"Another TPM repair is running" if locked else b"Refusing missing, stale or ineligible TPM plan") in result.stdout
+    added = [json.loads(x) for x in (p / "trace").read_text().splitlines()[len(before):]]
+    assert not any(x[0] == "systemd-cryptenroll" and x[1:] != ["--help"] for x in added)
+    if locked:
+        # Refuse BEFORE any authoritative validation, not just before mutation.
+        assert not any(x[0] in ("journalctl", "cryptsetup", "tpm2_readpublic", "systemd-cryptenroll") for x in added)
+
+
+def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_secret=True, delayed_edit=False):
     with tempfile.TemporaryDirectory(prefix="tpm-repair-") as td:
         p = Path(td)
         (p / "bin").mkdir()
@@ -110,6 +135,7 @@ def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_
         # Test-only copy: production has no configurable privileged fixture paths.
         script = (ROOT / "sbin/secureboot-fix").read_text()
         script = script.replace("/etc/crypttab", str(p / "crypttab"))
+        script = script.replace("/run/secureboot-watchdog-tpm.lock", str(p / "repair.lock"))
         (p / "secureboot-fix").write_text(script)
         for lib in ["secureboot-tpm-preflight", "secureboot-tpm-replace"]:
             (p / lib).write_text((ROOT / "sbin" / lib).read_text())
@@ -122,11 +148,21 @@ def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_
         proc = subprocess.Popen(args, env=env, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         try:
+            prefix = b""
+            if delayed_edit or action == "concurrent-stdin":
+                assert select.select([proc.stdout], [], [], 10)[0], "no initial preflight completion"
+                prefix = proc.stdout.readline()
+                assert prefix.startswith(b"[STEPS]"), prefix
+                if delayed_edit:
+                    metadata["tokens"]["4"]["tpm2-pcr-bank"] = "sha256"
+                    (p / "metadata").write_text(json.dumps(metadata))
+                else:
+                    competitor(args, env, p)
             if send_secret:
                 proc.stdin.write((SECRET + "\n").encode())
             proc.stdin.close()
             proc.stdin = None
-            if action:
+            if action and action != "concurrent-stdin":
                 wait_ready(p, proc)
                 if action == "close-reader":
                     proc.stdout.close()
@@ -135,12 +171,18 @@ def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_
                     proc.send_signal(signal.SIGHUP)
                 elif action == "int":
                     proc.send_signal(signal.SIGINT)
+                elif action in ("concurrent", "concurrent-cleanup"):
+                    if action == "concurrent-cleanup":
+                        wait_file(p / "cleanup-ready", proc)
+                    competitor(args, env, p)
                 else:
                     proc.send_signal(signal.SIGTERM)
-            output = proc.communicate(timeout=10)[0] or b""
+            output = prefix + (proc.communicate(timeout=10)[0] or b"")
             rc = proc.returncode
-            valid = expected == PLAN and not edit and mode != "preflight-cleanup-failure"
-            success = valid and (dry or (send_secret and mode == "success" and action not in ("term", "int")))
+            lock_stat = (p / "repair.lock").stat()
+            assert lock_stat.st_uid == os.geteuid() and (lock_stat.st_mode & 0o777) == 0o600
+            valid = expected == PLAN and not edit and not delayed_edit and mode != "preflight-cleanup-failure"
+            success = valid and (dry or (send_secret and mode in ("success", "slow-cleanup") and action not in ("term", "int")))
             assert (rc == 0) == success, (mode, action, rc, output)
             assert SECRET.encode() not in output
             trace = (p / "trace").read_text()
@@ -161,6 +203,9 @@ def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_
                 assert bool(keys) == (mode == "key-cleanup-failure")
             else:
                 assert not list(p.glob("unlock.*"))
+            if delayed_edit:
+                assert (p / "cleanup").exists(), "stale-plan rejection leaked its temporary key"
+                assert b"Refusing missing, stale or ineligible TPM plan" in output
             state = (p / "state").read_text()
             if mode in ("wrong-passphrase", "enroll-failure") or action in ("term", "int") or dry or not valid or not send_secret:
                 assert state == "old"
@@ -172,6 +217,10 @@ def case(mode="success", action=None, dry=False, expected=PLAN, edit=None, send_
                 assert b"TPM enrollment replaced" in output
             else:
                 assert b"TPM enrollment replaced" not in output
+            if action in ("concurrent", "concurrent-stdin", "concurrent-cleanup"):
+                # Once the lock is released, the first helper's replacement
+                # metadata makes the old confirmation stale, not reusable.
+                competitor(args, env, p, locked=False)
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -182,6 +231,10 @@ for scenario in ["success", "wrong-passphrase", "enroll-failure", "wipe-failure"
     case(scenario)
 case(dry=True)
 case(send_secret=False)
+case(delayed_edit=True)
+case(action="concurrent-stdin")
+case(action="concurrent")
+case(mode="slow-cleanup", action="concurrent-cleanup")
 for interruption in ["term", "int", "hup", "close-reader"]:
     case(action=interruption)
 case(expected={})

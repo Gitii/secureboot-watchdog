@@ -27,22 +27,28 @@ tpm_replace() {
     trap tpm_cleanup EXIT
     trap 'exit 143' TERM
     trap 'exit 130' INT
+    tpm_log '[STEPS] replace-enrollment|cleanup-key'
+    if (( ! dry_run )); then
+        if ! IFS= read -r pw || [[ -z $pw ]]; then
+            tpm_log 'No LUKS passphrase received.'
+            exit 1
+        fi
+        umask 077
+        key=$(mktemp /run/secureboot-tpm-key.XXXXXXXX) || exit 1
+        printf '%s' "$pw" > "$key" || exit 1
+        unset pw
+        # Reading stdin may have waited indefinitely. Under the still-held
+        # repair lock, reject any changed evidence, target, token or policy.
+        # Only this FINAL authoritative plan supplies enrollment arguments.
+        plan=$(validated_tpm_plan) || exit 1
+    fi
     device=$(readlink -e -- "/dev/disk/by-uuid/$(jq -r .luks_uuid <<<"$plan")") || exit 1
     pcrs=$(jq -r '.policy as $p | $p.pcrs | map(tostring + ":" + $p.bank) | join("+")' <<<"$plan") || exit 1
     handle=$(jq -r .policy.seal_key_handle <<<"$plan") || exit 1
-    tpm_log '[STEPS] replace-enrollment|cleanup-key'
     if (( dry_run )); then
         tpm_log "[dry-run] would replace TPM enrollment on $device (PCRs $pcrs, sealing key $handle); no changes made."
         exit 0
     fi
-    if ! IFS= read -r pw || [[ -z $pw ]]; then
-        tpm_log 'No LUKS passphrase received.'
-        exit 1
-    fi
-    umask 077
-    key=$(mktemp /run/secureboot-tpm-key.XXXXXXXX) || exit 1
-    printf '%s' "$pw" > "$key" || exit 1
-    unset pw
     tpm_log '[STEP] replace-enrollment'
     # Both supported systemd versions enroll first, wipe only on success,
     # and exclude the new slot. Explicit options prevent discovered policies.
