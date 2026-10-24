@@ -1,0 +1,140 @@
+#!/bin/bash
+# Shared read-only evidence and plan validation. Source, do not execute.
+tpm_evidence() {
+    local journal=$1 crypttab=$2 name source key options rest unit hits evidence='[]'
+    [[ -r $crypttab ]] || { echo '[]'; return; }
+    while read -r name source key options rest || [[ -n $name ]]; do
+        [[ -n $name && $name != \#* && -n $source ]] || continue
+        [[ ,$options, == *,tpm2-device=*,* ]] || continue
+        printf -v name '%b' "$name"
+        unit=$(systemd-escape --template=systemd-cryptsetup@.service -- "$name") || continue
+        hits=$(jq -sc --arg unit "$unit" --arg mapping "$name" --arg source "$source" '
+            [.[] | select(._SYSTEMD_UNIT == $unit)
+             | select(.MESSAGE | type == "string")
+             | select(.MESSAGE | test("Failed to unseal secret using TPM2|TPM2 PCR validation failed|PCR policy did not match|tpm2.*lockout"; "i"))
+             | {mapping:$mapping, source:$source, unit:._SYSTEMD_UNIT,
+                message:.MESSAGE, comm:(._COMM // ""), exe:(._EXE // "")}]
+        ' <<<"$journal") || return 1
+        evidence=$(jq -nc --argjson old "$evidence" --argjson new "$hits" '$old + $new') || return 1
+    done < "$crypttab"
+    echo "$evidence"
+}
+
+tpm_refuse() {
+    jq -nc --arg reason "$1" '{eligible:false, reason:$reason, plan:null}'
+}
+
+# Evidence must be freshly derived, never loaded from a status file.
+tpm_preflight() {
+    local evidence=$1 crypttab=$2 mapping source key options rest name count=0
+    local device uuid metadata token plan help srk handle tmp actual option
+    local -a tpm_options
+    if ! jq -e 'length > 0 and ([.[] | [.mapping,.source]] | unique | length == 1)
+        and (any(.[]; .message | test("lockout|TPM_RC_LOCKOUT|0x0*921\\b"; "i")) | not)' \
+        <<<"$evidence" >/dev/null; then
+        tpm_refuse 'Missing or ambiguous affected disk, or explicit TPM lockout. Review the evidence manually.'; return
+    fi
+    mapping=$(jq -r '.[0].mapping' <<<"$evidence")
+    source=$(jq -r '.[0].source' <<<"$evidence")
+    while read -r name device key option rest || [[ -n $name ]]; do
+        [[ -n $name && $name != \#* ]] || continue
+        printf -v name '%b' "$name"
+        [[ $name == "$mapping" ]] || continue
+        count=$((count + 1))
+        [[ $device == "$source" && -z $rest && ( $key == none || $key == - ) ]] || continue
+        options=$option
+    done < "$crypttab"
+    if [[ $count != 1 || -z ${options:-} ]]; then
+        tpm_refuse 'Crypttab mapping is ambiguous or uses an unsupported key source.'; return
+    fi
+    # Reject enrollment/unlock overrides, detached headers, and unknown options.
+    IFS=, read -r -a tpm_options <<<"$options"
+    for option in "${tpm_options[@]}"; do
+        case $option in
+            luks|discard|nofail|x-initrd.attach|initramfs|tpm2-device=auto) ;;
+            *) tpm_refuse 'Crypttab has unsupported options; automatic repair would risk changing policy.'; return;;
+        esac
+    done
+    [[ ,$options, == *,tpm2-device=auto,* ]] || {
+        tpm_refuse 'Crypttab does not select the supported automatic TPM device.'; return;
+    }
+    case $source in
+        UUID=*) device="/dev/disk/by-uuid/${source#UUID=}";;
+        /dev/*) device=$source;;
+        *) tpm_refuse 'Unsupported crypttab device identity.'; return;;
+    esac
+    device=$(readlink -e -- "$device") || { tpm_refuse 'Cannot resolve the affected LUKS device.'; return; }
+    uuid=$(cryptsetup luksUUID "$device" 2>/dev/null) || { tpm_refuse 'Cannot read LUKS UUID.'; return; }
+    uuid=${uuid,,}
+    [[ $uuid =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+        tpm_refuse 'Invalid LUKS UUID.'; return;
+    }
+    if [[ $source == UUID=* && ${source#UUID=} != "$uuid" ]]; then
+        tpm_refuse 'Crypttab and LUKS UUID disagree.'; return
+    fi
+    metadata=$(cryptsetup luksDump --dump-json-metadata "$device" 2>/dev/null) || {
+        tpm_refuse 'Cannot read LUKS2 metadata.'; return;
+    }
+    # Single token/slot, explicit static PCR policy and persistent SRK. Unknown
+    # fields fail closed even when systemd would ignore them. Legacy primary
+    # algorithms cannot be explicitly reproduced by current cryptenroll.
+    token=$(jq -ce '
+        . as $m | .tokens | to_entries | map(select(.value.type == "systemd-tpm2"))
+        | select(length == 1) | .[0]
+        | select(.key | test("^(0|[1-9][0-9]*)$"))
+        | select((.value | keys - ["type","keyslots","tpm2-blob","tpm2-pcrs","tpm2-pcr-bank",
+            "tpm2-policy-hash","tpm2-pin","tpm2_pcrlock","tpm2_srk"]) == [])
+        | select(.value.keyslots | type == "array" and length == 1)
+        | select(.value.keyslots[0] | type == "string" and test("^(0|[1-9][0-9]*)$"))
+        | select($m.keyslots[.value.keyslots[0]].type == "luks2")
+        | . as $t | select(all($m.tokens | to_entries[];
+            .key == $t.key or (.value.keyslots | index($t.value.keyslots[0]) | not)))
+        | select(.value["tpm2-pin"] == false and .value.tpm2_pcrlock == false)
+        | select(.value["tpm2-pcr-bank"] | IN("sha1","sha256","sha384","sha512"))
+        | select(.value["tpm2-pcrs"] | type == "array" and length > 0
+            and all(.[]; type == "number" and floor == . and . >= 0 and . <= 23)
+            and (unique | length) == length)
+        | select(.value["tpm2-policy-hash"] | type == "string" and test("^[0-9a-f]{64}$"))
+        | select(.value["tpm2-blob"] | type == "string" and test("^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$") and length > 0)
+        | select(.value.tpm2_srk | type == "string" and length > 0)
+        | .value["tpm2-pcrs"] |= sort
+        | {id:.key, metadata:.value}
+    ' <<<"$metadata" 2>/dev/null) || {
+        tpm_refuse 'Missing, ambiguous or unsupported TPM enrollment. Only explicit static-PCR persistent-key policies are supported.'; return;
+    }
+    help=$(systemd-cryptenroll --help 2>/dev/null) || { tpm_refuse 'Enrollment tooling is unavailable.'; return; }
+    for option in --tpm2-pcrs --tpm2-seal-key-handle --tpm2-with-pin --tpm2-public-key --tpm2-pcrlock; do
+        [[ $help == *"$option"* ]] || { tpm_refuse 'Installed enrollment tooling cannot reproduce this policy.'; return; }
+    done
+    srk=$(jq -r '.metadata.tpm2_srk' <<<"$token")
+    # tpm2-tss serialization starts with the big-endian persistent handle.
+    # Compare the ENTIRE read-only serialization, preserving the public key,
+    # algorithm, name and attributes rather than trusting only the handle.
+    handle=$(printf '%s' "$srk" | base64 -d 2>/dev/null | od -An -N4 -tx1 | tr -d ' \n')
+    if [[ ! $handle =~ ^81[0-9a-f]{6}$ ]]; then
+        tpm_refuse 'Unsupported TPM sealing-key identity.'; return
+    fi
+    tmp=$(mktemp -d) || return 1
+    if ! tpm2_readpublic -T device:/dev/tpmrm0 -c "0x$handle" -t "$tmp/srk" >/dev/null 2>&1; then
+        rm -f -- "$tmp/srk"; rmdir -- "$tmp"
+        tpm_refuse 'Cannot verify the persistent TPM sealing key (tpm2_readpublic required).'; return
+    fi
+    actual=$(base64 -w0 < "$tmp/srk")
+    rm -f -- "$tmp/srk"; rmdir -- "$tmp"
+    if [[ $srk != "$actual" ]]; then
+        tpm_refuse 'The persistent TPM sealing key no longer matches the enrollment.'; return
+    fi
+    plan=$(jq -nc --arg uuid "$uuid" --arg mapping "$mapping" --arg source "$source" \
+        --arg options "$options" --arg handle "0x$handle" --argjson token "$token" '
+        {luks_uuid:$uuid, mapping:$mapping, source:$source, crypttab_options:$options,
+         token:$token, policy:{pcrs:$token.metadata["tpm2-pcrs"], bank:$token.metadata["tpm2-pcr-bank"],
+         seal_key_handle:$handle, pin:false, signed_pcr:false, pcrlock:false}}') || return 1
+    jq -nc --argjson plan "$plan" '{eligible:true, reason:"Supported static-PCR plan; automatic repair remains disabled.", plan:$plan}'
+}
+
+# Constraints only: current MUST come from authoritative preflight.
+tpm_plan_matches() {
+    local current=$1 expected=$2
+    jq -en --argjson current "$current" --argjson expected "$expected" \
+        '$current.eligible == true and $current.plan != null and $current.plan == $expected' >/dev/null
+}

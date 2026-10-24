@@ -4,20 +4,24 @@
 # shellcheck disable=SC2329  # fix_* and helper functions are dispatched indirectly
 set -uo pipefail
 shopt -s nullglob
+# shellcheck source=sbin/secureboot-tpm-preflight
+source "$(dirname -- "${BASH_SOURCE[0]}")/secureboot-tpm-preflight"
 
 STATUS_FILE=${STATUS_FILE:-/run/secureboot-monitor/status.json}
 MOK_DIR=${MOK_DIR:-/var/lib/shim-signed/mok}
 DRY_RUN=0
 CODE=""
+EXPECTED_TPM_PLAN=""
 
 VALID_CODES="SB_DISABLED LOCKDOWN_OFF CMDLINE_LOCKDOWN_OVERRIDE UNSIGNED_MODULE_LOADED DKMS_BUILD_FAILED DKMS_UNSIGNED SIGNATURE_FAILURES EFI_UNSIGNED MOK_NOT_ENROLLED MOK_PENDING SBAT_REVOKED TPM_PCR_DRIFT"
 
-usage() { echo "usage: secureboot-fix --code <CODE> [--dry-run]" >&2; exit 2; }
+usage() { echo "usage: secureboot-fix --code <CODE> [--dry-run] [--expected-tpm-plan JSON]" >&2; exit 2; }
 
 while (( $# )); do
     case $1 in
         --code) CODE=$2; shift 2;;
         --dry-run) DRY_RUN=1; shift;;
+        --expected-tpm-plan) [[ $# -ge 2 ]] || usage; EXPECTED_TPM_PLAN=$2; shift 2;;
         -h|--help) usage;;
         *) echo "Unknown arg: $1" >&2; usage;;
     esac
@@ -268,9 +272,16 @@ fix_SBAT_REVOKED() {
 }
 
 fix_TPM_PCR_DRIFT() {
-    # No stdin read or TPM/LUKS mutation until policy-bound safe replacement
-    # exists. This also refuses stale notifications and direct invocations.
     echo "Automatic TPM repair is disabled; review the attributed disk evidence and existing enrollment manually." >&2
+    local journal evidence current
+    journal=$(journalctl -b --no-pager -o json 2>/dev/null) || return 1
+    evidence=$(tpm_evidence "$journal" /etc/crypttab) || return 1
+    current=$(tpm_preflight "$evidence" /etc/crypttab) || return 1
+    if [[ -z $EXPECTED_TPM_PLAN ]] || ! tpm_plan_matches "$current" "$EXPECTED_TPM_PLAN"; then
+        echo 'Refusing missing, stale or ineligible TPM plan. Review current disk and enrollment details.' >&2
+        return 1
+    fi
+    # No stdin read or mutation until safe replacement exists (task 3).
     return 1
 }
 

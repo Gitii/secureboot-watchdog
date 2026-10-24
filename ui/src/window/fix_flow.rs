@@ -39,6 +39,11 @@ pub fn build_fix_flow_page(
     issue: Issue,
     nav: &adw::NavigationView,
 ) -> adw::NavigationPage {
+    // Defense in depth: even direct callers cannot enter password/progress for
+    // a disabled repair (including stale auto_fixable TPM status).
+    if !issue.can_fix() {
+        return super::details::build_details_page(issue, |_| {});
+    }
     let secret = secret_kind(&issue.code, DEFAULT_MOK_DIR);
 
     let tv = adw::ToolbarView::new();
@@ -109,7 +114,7 @@ fn build_confirm_page(state: Rc<FlowState>) -> gtk::Widget {
         .build();
 
     let detail = gtk::Label::builder()
-        .label(&state.issue.detail)
+        .label(state.issue.details_text())
         .halign(gtk::Align::Fill)
         .xalign(0.0)
         .hexpand(true)
@@ -351,6 +356,11 @@ fn launch_fix(state: Rc<FlowState>, password: Option<Zeroizing<Vec<u8>>>) {
         Some(s) => FixMode::Mock { script: s },
         None => FixMode::Pkexec {
             code: &state.issue.code,
+            expected_tpm_plan: state
+                .issue
+                .tpm_preflight
+                .as_ref()
+                .and_then(|p| p.plan.as_ref()),
         },
     };
 

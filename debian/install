@@ -1,6 +1,7 @@
 bin/secureboot-notify usr/bin
 sbin/secureboot-check usr/sbin
 sbin/secureboot-fix usr/sbin
+sbin/secureboot-tpm-preflight usr/sbin
 systemd/secureboot-monitor.service usr/lib/systemd/system
 systemd/secureboot-monitor.timer usr/lib/systemd/system
 systemd/secureboot-dkms.path usr/lib/systemd/system

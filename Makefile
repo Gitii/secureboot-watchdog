@@ -4,6 +4,7 @@ SUDO      := $(if $(filter 0,$(shell id -u)),,sudo)
 DIST      := dist
 
 SCRIPTS   := bin/secureboot-notify sbin/secureboot-check sbin/secureboot-fix \
+             sbin/secureboot-tpm-preflight \
              kernel/zzz-secureboot-recheck debian/postinst scripts/*.sh tests/*.sh
 UNITS     := systemd/*.service systemd/*.timer systemd/*.path
 
@@ -18,6 +19,7 @@ all:
 	cd $(UI) && cargo build --release --locked
 
 check:
+	bash tests/test-tpm-repair-preflight.sh
 	bash tests/test-tpm-check.sh
 	bash tests/test-notify.sh
 	cd $(UI) && cargo test --locked

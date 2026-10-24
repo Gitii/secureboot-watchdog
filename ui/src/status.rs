@@ -5,7 +5,7 @@
 //! `bin/secureboot-notify`.
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -30,6 +30,46 @@ pub struct Issue {
     /// Journal provenance, retained separately from human-readable guidance.
     #[serde(default)]
     pub tpm_evidence: Vec<TpmEvidence>,
+    #[serde(default)]
+    pub tpm_preflight: Option<TpmPreflight>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TpmPreflight {
+    pub eligible: bool,
+    pub reason: String,
+    pub plan: Option<TpmPlan>,
+}
+
+/// Confirmation constraints, not authority. Root derives and compares every
+/// field, including the complete token metadata, before executing a repair.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TpmPlan {
+    pub luks_uuid: String,
+    pub mapping: String,
+    pub source: String,
+    pub crypttab_options: String,
+    pub token: TpmToken,
+    pub policy: TpmPolicy,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TpmToken {
+    pub id: String,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TpmPolicy {
+    pub pcrs: Vec<u8>,
+    pub bank: String,
+    pub seal_key_handle: String,
+    pub pin: bool,
+    pub signed_pcr: bool,
+    pub pcrlock: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,6 +99,20 @@ impl Issue {
                 evidence.exe,
                 evidence.message
             ));
+        }
+        if let Some(preflight) = &self.tpm_preflight {
+            text.push_str(&format!("\n\nTPM preflight: {}", preflight.reason));
+            if preflight.eligible {
+                if let Some(plan) = &preflight.plan {
+                    text.push_str(&format!(
+                        "\nTarget: {} ({})\nLUKS UUID: {}\nToken: {}\nStatic PCRs: {} ({})\nSealing key: {}\nPIN: {}; signed PCR: {}; PCRlock: {}",
+                        plan.mapping, plan.source, plan.luks_uuid, plan.token.id,
+                        plan.policy.pcrs.iter().map(u8::to_string).collect::<Vec<_>>().join("+"),
+                        plan.policy.bank, plan.policy.seal_key_handle,
+                        plan.policy.pin, plan.policy.signed_pcr, plan.policy.pcrlock,
+                    ));
+                }
+            }
         }
         text
     }
@@ -212,8 +266,26 @@ mod tests {
         let issue = &status.issues[0];
         assert!(!issue.can_fix());
         let evidence = &issue.tpm_evidence[0];
-        assert_eq!(evidence.source, "UUID=example-luks-uuid");
+        assert_eq!(evidence.source, "UUID=22222222-2222-2222-2222-222222222222");
         let text = issue.details_text();
+        for value in [
+            "4+12",
+            "sha384",
+            "0x81000001",
+            "Token: 4",
+            "automatic repair remains disabled",
+        ] {
+            assert!(text.contains(value), "missing plan detail: {value}");
+        }
+        let preflight = issue.tpm_preflight.as_ref().unwrap();
+        assert!(preflight.eligible);
+        let plan = preflight.plan.as_ref().unwrap();
+        let roundtrip: TpmPlan =
+            serde_json::from_str(&serde_json::to_string(plan).unwrap()).unwrap();
+        assert_eq!(plan, &roundtrip);
+        let mut stale = issue.clone();
+        stale.auto_fixable = true;
+        assert!(!stale.can_fix());
         for value in [
             &evidence.mapping,
             &evidence.source,
